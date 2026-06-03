@@ -20,10 +20,12 @@ Examples:
 
 ## Non-functional requirements
 
-1. Agent is programmed using Micorosft Agent Framework
-2. Agent is running in Azure AI Foundry
-3. Agent uses OpenAI model
-4. Agent must be protected against prompt injections
-5. Agent must have prompt shields
-6. Agent must have content filter metadata - inspect provider response
-7. Agent infrastructure is deployed using Bicep code
+1. Agent is programmed using Micorosft Agent Framework.
+2. Agent is running in Azure AI Foundry.
+3. Agent uses OpenAI model.
+4. The meteorologist persona is defined in an external MD file that is uploaded to agent at start.
+5. Agent must be protected against prompt injections.
+6. Agent must have prompt shields.
+7. Agent must have content filter metadata - inspect provider response.
+8. Agent infrastructure is deployed using Bicep code.
+9. Use Bicep for Azure OpenAI RAI policies/content filters.
