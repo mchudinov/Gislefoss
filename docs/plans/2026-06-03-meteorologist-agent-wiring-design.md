@@ -10,9 +10,10 @@
 >   Guardrails** (which include Prompt Shields and apply to Agent Service agents),
 >   superseding the standalone Azure AI Content Safety pass.
 > - *2026-06-04:* Affirmed **platform-enforced protection** as a design tenet (no app-side
->   enforcement passes); set the prompt-injection control to **annotate** so the persona
->   handles mixed messages; reframed **NFR #7** around platform-surfaced metadata plus a
->   confirmatory code spike; added **§6 Observability** (Application Insights / OpenTelemetry).
+>   enforcement passes); set the prompt-injection control to **block** (full platform-first —
+>   a mixed "forecast + injection" message is declined wholesale); reframed **NFR #7** around
+>   platform-surfaced metadata plus a confirmatory code spike; added **§6 Observability**
+>   (Application Insights / OpenTelemetry).
 
 This document describes how the **Gislefoss** Meteorologist agent is wired into the existing
 .NET 10 / Aspire solution. It is the agreed design to build against, not a description of
@@ -39,7 +40,7 @@ pieces are the persona's in-prompt resistance and reading the run outcome.
 | Agent host | **Azure AI Foundry Agent Service** (hosted persistent agent) | Persona-as-resource matches NFR #4; threads/runs server-side; **Guardrails apply to Agent Service agents** |
 | .NET topology | **In-process `Agent` class library** consumed by the Blazor `Web` app | One deployable, server-side trust boundary, unit-testable |
 | Protection model | **Platform-enforced** — native Foundry **Guardrail** on the deployment (content safety + Prompt Shields + protected materials), configured in Bicep; **no app-side enforcement passes** | The platform-first tenet above |
-| Prompt-injection action | **Annotate** (not block) — the run completes, the persona answers the weather and declines the rest, and we log the annotation; hard **block** reserved for harmful categories | Mixed "forecast + injection" still gets its forecast — but this makes the **persona** the injection enforcer: a deliberate, flippable exception to platform-first (pending spike that annotate is supported at policy level). See §4 |
+| Prompt-injection action | **Block** — the platform stops a detected injection inline; the run is blocked and the message declined wholesale | Pure platform-first: enforcement is the deployment RAI policy, not the persona. A mixed "forecast + injection" message is declined entirely — an accepted UX cost. See §4 |
 | NFR #7 satisfaction | Inspect the **platform-surfaced** content-filter metadata on the run (`last_error` detail); a **code spike is the first implementation task** to confirm granularity, with coarse run-status as the accepted floor | Granular metadata is a platform artifact, not an app call — keeps inspection platform-side |
 | Observability | **Application Insights** (Azure Monitor) via OpenTelemetry — the native Foundry agent-tracing backend; one shared resource for the app *and* the Foundry project | End-to-end correlated traces; platform-native; Bicep-provisioned (NFR #8) |
 | Auth | **`DefaultAzureCredential`** (managed identity in Azure, dev credential locally) | No keys in config/logs; Bicep role-assignment friendly |
@@ -96,7 +97,7 @@ Each piece is small and sits behind an interface for testability.
   `AgentReply { Text, Outcome, GuardrailMetadata }`.
 - **`RunOutcomeInspector`** — reads the platform-surfaced Guardrail annotations
   (detected/filtered values, risk categories) and the run's `RunStatus` / `last_error`;
-  classifies the result as `Completed` / `Annotated` / `Blocked` / `Failed` and surfaces the
+  classifies the result as `Completed` / `Blocked` / `Failed` and surfaces the
   metadata for logging. This is the NFR #7 inspection point.
 
 **DI.** An `AddMeteorologistAgent(configuration)` extension registers the
@@ -118,17 +119,17 @@ The chat page calls the scoped `IMeteorologistConversation.SendAsync(text, ct)`:
    `last_error`:
    - **Completed (clean)** → return the assistant text (persona-shaped: leads with the
      answer, emoji, asks for a place when missing, declines non-weather as out-of-scope).
-   - **Annotated** (prompt-injection *detected*, action = annotate) → the run still
-     completes; the persona answers the in-scope weather and declines the injected part. Log
-     the annotation. (The persona's in-prompt resistance is the complementary layer.)
-   - **Blocked** (harmful category, action = block) → log the metadata, return a safe decline.
+   - **Blocked** (prompt-injection *or* a harmful category, action = block) → the platform
+     stops it inline; log the metadata and return a safe, on-brand decline. (A mixed
+     "forecast + injection" message is declined wholesale — the accepted cost of platform-side
+     enforcement. The persona's in-prompt resistance remains as defense-in-depth.)
    - **Failed / Expired** → friendly "try again," error logged with the run id.
 3. **Render.** The page appends the reply. Token streaming (`RunStreamingAsync`) is a noted
    nice-to-have, not v1.
 
 **No app-side pre-gate.** Consistent with the platform tenet, there is no app call before the
-model; the Guardrail enforces inline. A detected injection is handled by *annotate* + persona,
-not a pre-emptive block.
+model; the Guardrail enforces inline — a detected injection is **blocked** by the platform,
+not gated by app code.
 
 **Thread lifecycle.** Created lazily on first message, lives for the Blazor circuit, survives
 reconnects; a new circuit starts a fresh thread. v1 does **not** persist threads across
@@ -150,7 +151,7 @@ deployment's Guardrail, not app code. Three layers:
    the model deployment, with controls for:
    - **content safety** — hate / violence / sexual / self-harm, **action = block**;
    - **prompt injection — Prompt Shields** — user-prompt *and* document attacks,
-     **action = annotate** (let the run complete; the persona declines the injected part);
+     **action = block** (the platform stops the injection inline);
    - **protected materials.**
 
    Guardrails scan input, output, and tool calls/responses inline and apply natively to
@@ -159,16 +160,14 @@ deployment's Guardrail, not app code. Three layers:
    Guardrail annotations + run status, producing loggable metadata and a safe substitution
    when content is blocked. NFR #7.
 
-**Annotate trade-off (a deliberate exception to platform-first).** Setting the
-prompt-injection control to *annotate* means the platform **detects but does not block** an
-injection — so the **persona becomes the actual enforcer** of the response (it declines the
-injected part). For injection specifically the annotation is therefore **observability, not
-enforcement**, and persona resistance is **load-bearing**, not "thin." This is a conscious
-exception to the platform tenet, made so a mixed "forecast + injection" message still gets its
-forecast. If you prefer injection defence fully on the platform, set the control to **block**
-and accept that such mixed messages are declined wholesale — this is a flippable call. (It
-also depends on a platform capability still to be confirmed: that `annotate` is a supported
-action for the jailbreak control at the deployment RAI-policy level — see Open items.)
+**Block — full platform-first (chosen).** The prompt-injection control is set to **block**:
+the platform stops a detected injection inline, on the deployment's RAI policy, with no
+app/persona involvement in the enforcement. Persona resistance therefore stays
+**defense-in-depth** (thin), not load-bearing. The accepted cost is UX — a mixed
+"forecast + ignore-your-instructions" message is declined **wholesale** rather than getting
+its forecast. (Annotate — let the run complete and have the persona decline only the injected
+part — was considered and rejected: it leans on a per-request, app-side setting that weakens
+the platform tenet.)
 
 **NFR #7 — honest scope.** The granular metadata (per-category severities, `jailbreak.detected`)
 is **produced by the platform** and appears in the provider response / `content_filter`
@@ -289,9 +288,8 @@ endpoints as parameters / connection strings for the dashboard.
 
 **Failure modes & responses:**
 
-- **Annotated run** (prompt-injection) → persona answers in-scope, declines the rest; log the
-  annotation.
-- **Guardrail-blocked run** (harmful) → safe decline; log the metadata.
+- **Blocked run** (prompt-injection *or* a harmful category) → safe, on-brand decline; log the
+  metadata.
 - Run `Failed` / `Expired` → friendly retry, logged with run id; 429 → SDK retry then a
   "busy, try again."
 - Persona file missing / empty, or agent provisioning failure → **fail fast** at startup.
@@ -301,11 +299,11 @@ endpoints as parameters / connection strings for the dashboard.
 - **Unit** — `RunOutcomeInspector` classification + annotation extraction across run results
   (fakes); `PersonaProvisioner` create-vs-update-by-hash (fake admin client); DI smoke.
 - **Component** — `MeteorologistConversation.SendAsync` with a fake agent, asserting the
-  outcomes (answer / annotated / blocked / failed).
+  outcomes (answer / blocked / failed).
 - **Integration (opt-in, env-gated)** — a real Foundry dev project with a Guardrail-attached
-  deployment: create-or-update; a weather question; an injection attempt (expect an
-  *annotation* + a weather answer with the injected part declined); an off-topic ask (persona
-  decline); skipped when the endpoint is unset. Also confirm a trace span reaches App Insights.
+  deployment: create-or-update; a weather question; an injection attempt (expect a platform
+  **block** + a safe decline); an off-topic ask (persona decline); skipped when the endpoint
+  is unset. Also confirm a trace span reaches App Insights.
 - **Persona regression** — a small prompt table (weather → answers; non-weather → declines;
   injection → stays on task) as living documentation.
 
@@ -337,11 +335,11 @@ endpoints as parameters / connection strings for the dashboard.
   Service run's `last_error` (and the installed `Azure.AI.Agents.Persistent` SDK) surfaces
   granular content-filter detail or only the coarse `content_filter` code. Drives whether
   NFR #7 is granular or coarse-but-principled. No app-side enforcement either way.
-  **Also confirm `annotate` is a supported action for the prompt-injection / jailbreak control
-  at the deployment RAI-policy level** — the annotate-action evidence was on the per-request
-  `prompt_shield` chat-completions parameter, *not* clearly on policy-level controls. If the
-  control is block-only, the §3 mixed-message UX does not hold and injection messages are
-  declined wholesale.
+  **Also confirm the prompt-injection / jailbreak control accepts `action: block` at the
+  deployment RAI-policy level** (the chosen setting) and identify its exact category key.
+  `block` for content-safety categories is confirmed; the jailbreak control's policy-level
+  shape (category name, whether it is a policy control vs. a per-request `prompt_shield`
+  parameter) needs nailing down.
 - **Confirm OTel ActivitySource name(s)** for the persistent-agents / Agent Framework path so
   agent spans export to App Insights (§6).
 - **Multi-replica provisioning race.** Container Apps scales horizontally, but the per-replica
