@@ -4,7 +4,7 @@
 FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra AS base
 USER $APP_UID
 WORKDIR /app
-EXPOSE 8089
+EXPOSE 8087
 
 
 # This stage is used to build the service project
