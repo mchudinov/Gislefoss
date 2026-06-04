@@ -617,7 +617,7 @@ git commit -m "feat(agent): startup persona provisioning, fail-fast on missing f
 **Files:**
 - Create: `src/Agent/Running/RunResult.cs`, `src/Agent/Running/IFoundryAgentRunner.cs`
 
-- [ ] **Step 1: Implement** (port + DTO; exercised in 3.2–3.3)
+- [x] **Step 1: Implement** (port + DTO; exercised in 3.2–3.3)
 
 > **Responses path:** the runner wraps a single in-process `AIAgent` (built by the Phase 4 factory and injected into the adapter), so the port takes **no `agentId`** — there is no server-side agent id to pass.
 
@@ -638,7 +638,7 @@ public interface IFoundryAgentRunner
 }
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add src/Agent/Running/RunResult.cs src/Agent/Running/IFoundryAgentRunner.cs
@@ -651,7 +651,7 @@ git commit -m "feat(agent): IFoundryAgentRunner port and RunResult"
 - Create: `src/Agent/Running/RunOutcomeInspector.cs`
 - Test: `src/Agent.Tests/RunOutcomeInspectorTests.cs`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```csharp
 using Agent;
@@ -689,9 +689,9 @@ public class RunOutcomeInspectorTests
 }
 ```
 
-- [ ] **Step 2: Run to verify fail** → FAIL.
+- [x] **Step 2: Run to verify fail** → FAIL.
 
-- [ ] **Step 3: Implement** (safe, on-brand fallback copy; no emoji on refusals/errors per the persona)
+- [x] **Step 3: Implement** (safe, on-brand fallback copy; no emoji on refusals/errors per the persona)
 
 ```csharp
 using Agent;
@@ -714,9 +714,9 @@ public sealed class RunOutcomeInspector
 }
 ```
 
-- [ ] **Step 4: Run to verify pass** → PASS (3 tests).
+- [x] **Step 4: Run to verify pass** → PASS (3 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/Agent/Running/RunOutcomeInspector.cs src/Agent.Tests/RunOutcomeInspectorTests.cs
@@ -729,7 +729,7 @@ git commit -m "feat(agent): classify run outcomes into safe replies"
 - Create: `src/Agent/Running/IMeteorologistConversation.cs`, `src/Agent/Running/MeteorologistConversation.cs`
 - Test: `src/Agent.Tests/MeteorologistConversationTests.cs`, `src/Agent.Tests/Fakes/FakeFoundryAgentRunner.cs`
 
-- [ ] **Step 1: Write the fake runner**
+- [x] **Step 1: Write the fake runner**
 
 ```csharp
 using Agent.Running;
@@ -754,7 +754,7 @@ public sealed class FakeFoundryAgentRunner : IFoundryAgentRunner
 }
 ```
 
-- [ ] **Step 2: Write the failing tests** (one thread is reused across turns; outcome is classified)
+- [x] **Step 2: Write the failing tests** (one thread is reused across turns; outcome is classified)
 
 ```csharp
 using Agent;
@@ -788,9 +788,9 @@ public class MeteorologistConversationTests
 }
 ```
 
-- [ ] **Step 3: Run to verify fail** → FAIL.
+- [x] **Step 3: Run to verify fail** → FAIL.
 
-- [ ] **Step 4: Implement**
+- [x] **Step 4: Implement**
 
 ```csharp
 namespace Agent.Running;
@@ -815,9 +815,9 @@ public sealed class MeteorologistConversation(
 }
 ```
 
-- [ ] **Step 5: Run to verify pass** → PASS (2 tests).
+- [x] **Step 5: Run to verify pass** → PASS (2 tests).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/Agent/Running/IMeteorologistConversation.cs src/Agent/Running/MeteorologistConversation.cs src/Agent.Tests/MeteorologistConversationTests.cs src/Agent.Tests/Fakes/FakeFoundryAgentRunner.cs
