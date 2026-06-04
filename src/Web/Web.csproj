@@ -32,6 +32,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Persona ships to the app's output root (NOT wwwroot, so it is never static-served). -->
+    <None Update="personas\gislefoss.md">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <ItemGroup>
     <Folder Include="Components\Layout\" />
     <Folder Include="Components\Pages\" />
   </ItemGroup>

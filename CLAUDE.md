@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Gislefoss is a **.NET 10 / .NET Aspire 13.1** application. The intended product (see `docs/idea.md`) is a **"Meteorologist" AI agent** that answers only weather-related questions and declines everything else. Planned stack: Microsoft Agent Framework, Azure AI Foundry, an OpenAI model, a persona loaded from an external Markdown file, with prompt-injection protection / prompt shields / content filters, deployed via Bicep.
 
-**Current state is scaffolding.** The agent does not exist yet: `personas/gislefoss.md` is an empty placeholder, the Blazor UI is the default "Hello, world!" stub (`src/Web/Components/Pages/Home.razor`), and no Bicep, no Agent Framework wiring, and no tests are present. `Azure.AI.OpenAI` 2.1.0 is referenced and `Settings` already has an `AzureOpenAI` config block, but nothing consumes them yet. Treat `docs/idea.md` as the requirements spec, not a description of existing code.
+**Current state: early implementation.** The agent runtime is not wired yet — there is no Agent Framework call (`AsAIAgent`) and no Azure AI Foundry adapter, and the Blazor UI is still the default "Hello, world!" stub (`src/Web/Components/Pages/Home.razor`). What exists: a complete persona at `src/Web/personas/gislefoss.md` (shipped to the app's output via a `Content` copy in `Web.csproj`), plus an `Agent` class library and an `Agent.Tests` xUnit project (Phases 1–2) holding value types, `AgentOptions`, and a persona-provisioning port — built and green, but **not yet consumed by Web's host**. There is no Bicep code yet (a Bicep plan lives under `docs/`). The chosen design is the Foundry **Responses path** (`AIProjectClient.AsAIAgent(model, name, instructions)`, persona passed in-process), so the server-side provisioning port from Phase 2 is slated for removal. `Azure.AI.OpenAI` 2.1.0 is referenced and `Settings` already has an `AzureOpenAI` config block, but nothing consumes them yet. Treat `docs/idea.md` as the requirements spec, not a description of existing code.
 
 ## Commands
 
@@ -23,7 +23,11 @@ dotnet run --project src/AppHost          # dashboard on http://localhost:15175
 dotnet run --project src/Web              # app on http://localhost:8087
 ```
 
-There is no test project yet. Add one to `src/Gislefoss.slnx` when introducing tests.
+Tests live in `src/Agent.Tests` (xUnit), part of `src/Gislefoss.slnx`:
+
+```powershell
+dotnet test src/Gislefoss.slnx
+```
 
 ## Architecture
 
