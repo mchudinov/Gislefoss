@@ -6,7 +6,7 @@
 
 > **Revision note (2026-06-04 — Responses path):** This plan originally targeted a **server-side** Foundry agent resource managed via `PersistentAgentsClient` (create-or-update by persona hash). The project has since chosen the **Responses path**: the persona stays in-repo (`personas/gislefoss.md`) and is passed as `instructions` to `AIProjectClient.AsAIAgent(model, name, instructions)` in-process — **no server-side agent resource, no create-or-update-by-hash provisioning.** Consequences threaded through below: **Phase 0** is slimmer, **Phase 2** (already merged in PR #2) is **superseded and slated for removal** in a separate cleanup PR, **Phase 3**'s runner/facade drop the agent-id/registry, and **Phase 4** collapses to a persona-reading `AIAgent` factory + run adapter.
 
-**Architecture:** A `net10.0` class library `Agent` holds all wiring. The persona is read from `personas/gislefoss.md` and passed as `instructions` to `AIProjectClient.AsAIAgent(...)`, which yields an in-process `AIAgent` (`ChatClientAgent`) — there is **no server-side agent resource**. A `MeteorologistAgentFactory` reads + validates the persona and builds that `AIAgent`; it is registered as an **eagerly-constructed singleton**, so a missing/empty persona **fails the app at boot**. Domain logic (run-outcome classification, the conversation facade) is TDD'd against the `IFoundryAgentRunner` **port**; the Foundry SDK lives only in the thin runner adapter + factory, built after a Phase 0 spike confirms the `AsAIAgent` surface. The Blazor `Web` app consumes the library via `AddMeteorologistAgent(...)`. Protection is fully platform-side (deployment Guardrail, `block` action); the app only reads outcomes.
+**Architecture:** A `net10.0` class library `Agent` holds all wiring. The persona is read from `personas/gislefoss.md` and passed as `instructions` to `AIProjectClient.AsAIAgent(...)`, which yields an in-process `AIAgent` (`ChatClientAgent`) — there is **no server-side agent resource**. A `MeteorologistAgentFactory` reads + validates the persona and builds that `AIAgent`; it is registered as an **eagerly-constructed singleton**, so a missing/empty persona **fails the app at boot**. Domain logic (run-outcome classification, the conversation facade) is TDD'd against the `IFoundryAgentRunner` **port**; the Foundry SDK lives only in the thin runner adapter + factory, built against the `AsAIAgent` surface confirmed by the Phase 0 spike (`notes/phase0-findings.md`). The Blazor `Web` app consumes the library via `AddMeteorologistAgent(...)`. Protection is fully platform-side (deployment Guardrail, `block` action); the app only reads outcomes.
 
 **Tech Stack:** .NET 10, C#, xUnit, Microsoft Agent Framework (`Microsoft.Agents.AI`), Foundry Responses provider (`Microsoft.Agents.AI.Foundry` + `Azure.AI.Projects` / `AIProjectClient`), `Azure.Identity`, MudBlazor, OpenTelemetry + Azure Monitor.
 
@@ -48,6 +48,8 @@
 
 ## Phase 0 — Spike: confirm the SDK & platform surface
 
+> **✅ COMPLETE (2026-06-04, PR #5).** Findings are recorded in [`notes/phase0-findings.md`](notes/phase0-findings.md) and folded into Phases 4 + 6 below; the spike (`src/spikes/FoundrySpike`) was deleted. **The going-in snippets in this section are the original *assumptions* — the spike corrected three of them** (run primitives `AgentThread`/`GetNewThread`/`AgentRunResponse` → `AgentSession`/`CreateSessionAsync`/`AgentResponse`; block exception `RequestFailedException` → `ClientResultException`; tracing via the `EnableGenAITracing` switch → the `.UseOpenTelemetry()` decorator). Read the findings doc, not these snippets, as the confirmed surface.
+
 > No production code. Output is `docs/superpowers/plans/notes/phase0-findings.md` recording confirmed signatures the factory + runner (Phase 4) and the Bicep plan depend on. Time-box ~2–3 hours (slimmer than the original server-side spike: the Responses path has no create-or-update-by-name surface to confirm).
 
 ### Task 0.1: Stand up a throwaway console against a dev Foundry project
@@ -55,7 +57,7 @@
 **Files:**
 - Create: `spikes/FoundrySpike/FoundrySpike.csproj` (console, `net10.0`; **do not** add to `Gislefoss.slnx`)
 
-- [ ] **Step 1: Create the console and add packages**
+- [x] **Step 1: Create the console and add packages**
 
 ```bash
 dotnet new console -o spikes/FoundrySpike
@@ -64,7 +66,7 @@ dotnet add spikes/FoundrySpike package Azure.AI.Projects --prerelease
 dotnet add spikes/FoundrySpike package Azure.Identity
 ```
 
-- [ ] **Step 2: Confirm `AsAIAgent` create + run** — against `FOUNDRY_PROJECT_ENDPOINT` + `FOUNDRY_MODEL_NAME`, after `az login`:
+- [x] **Step 2: Confirm `AsAIAgent` create + run** — against `FOUNDRY_PROJECT_ENDPOINT` + `FOUNDRY_MODEL_NAME`, after `az login`:
 
 ```csharp
 var project = new AIProjectClient(new Uri(endpoint), new DefaultAzureCredential());
@@ -75,19 +77,19 @@ Console.WriteLine(await agent.RunAsync("hi", thread));
 
 Record: the exact assembly/namespace for `AIProjectClient` and `AsAIAgent`; **whether `AsAIAgent` is an extension or instance method, sync or async, and its exact parameter names/order**; that calling it creates **no** server-side agent resource (in-process `ChatClientAgent` only); and whether `GetNewThread`/`RunAsync` match the design's reference snippets. Pin the installed package versions for Phase 1.
 
-- [ ] **Step 3: Confirm the run-outcome surface** — drive a run and inspect the returned `AgentRunResponse` for: how completed text is exposed (`.Text`), the error shape on failure, and **whether any granular content-filter / Guardrail annotation is exposed on the response or `AgentRunResponse.RawRepresentation`**. Record exactly what is available (drives whether NFR #7 is granular or coarse, and how `FoundryAgentRunner` maps a block in Phase 4).
+- [x] **Step 3: Confirm the run-outcome surface** — drive a run and inspect the returned `AgentRunResponse` for: how completed text is exposed (`.Text`), the error shape on failure, and **whether any granular content-filter / Guardrail annotation is exposed on the response or `AgentRunResponse.RawRepresentation`**. Record exactly what is available (drives whether NFR #7 is granular or coarse, and how `FoundryAgentRunner` maps a block in Phase 4).
 
 ### Task 0.2: Confirm the Guardrail `block` surface (for the Bicep plan)
 
-- [ ] **Step 1:** In the Foundry portal (or via REST `PUT /raiPolicies/{name}`), create a policy that sets the **prompt-injection / jailbreak** control to **`block`**. Record the exact control **category key** and the policy JSON shape (`controls[]` vs `contentFilters[]`), and confirm `block` is accepted at the *deployment policy* level (not only the per-request `prompt_shield` parameter). The Guardrail attaches at the **model-deployment** level, so it applies on the Responses path with no server-side agent.
+- [x] **Step 1:** In the Foundry portal (or via REST `PUT /raiPolicies/{name}`), create a policy that sets the **prompt-injection / jailbreak** control to **`block`**. Record the exact control **category key** and the policy JSON shape (`controls[]` vs `contentFilters[]`), and confirm `block` is accepted at the *deployment policy* level (not only the per-request `prompt_shield` parameter). The Guardrail attaches at the **model-deployment** level, so it applies on the Responses path with no server-side agent.
 
-- [ ] **Step 2:** Send a known jailbreak prompt **through the `AsAIAgent` `RunAsync` call above** to a deployment with that policy attached; record how the **block** surfaces to the caller (thrown `RequestFailedException` with `ErrorCode == "content_filter"` / HTTP 400, vs a non-throwing response carrying a filter annotation). This is the contract `FoundryAgentRunner` maps in Phase 4 — it may differ from the persistent-agents path, so confirm it on **this exact** path.
+- [x] **Step 2:** Send a known jailbreak prompt **through the `AsAIAgent` `RunAsync` call above** to a deployment with that policy attached; record how the **block** surfaces to the caller (thrown `RequestFailedException` with `ErrorCode == "content_filter"` / HTTP 400, vs a non-throwing response carrying a filter annotation). This is the contract `FoundryAgentRunner` maps in Phase 4 — it may differ from the persistent-agents path, so confirm it on **this exact** path.
 
 ### Task 0.3: Confirm the observability source name
 
-- [ ] **Step 1:** With `AppContext.SetSwitch("Azure.Experimental.EnableGenAITracing", true)` and `.AddAzureMonitorTraceExporter()`, run one `AsAIAgent` call and record which **ActivitySource** name(s) emit spans for the `AIProjectClient` / `AsAIAgent` path (the docs show `Azure.AI.Projects.*` for `AIProjectClient` — confirm the exact source name). Record in findings; Phase 6 uses it.
+- [x] **Step 1:** With `AppContext.SetSwitch("Azure.Experimental.EnableGenAITracing", true)` and `.AddAzureMonitorTraceExporter()`, run one `AsAIAgent` call and record which **ActivitySource** name(s) emit spans for the `AIProjectClient` / `AsAIAgent` path (the docs show `Azure.AI.Projects.*` for `AIProjectClient` — confirm the exact source name). Record in findings; Phase 6 uses it.
 
-- [ ] **Step 2: Record findings & delete the spike**
+- [x] **Step 2: Record findings & delete the spike**
 
 ```bash
 git add docs/superpowers/plans/notes/phase0-findings.md
@@ -119,10 +121,10 @@ dotnet sln src/Gislefoss.slnx add src/Agent src/Agent.Tests
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="Microsoft.Agents.AI" Version="<from-phase0>" />
-  <PackageReference Include="Microsoft.Agents.AI.Foundry" Version="<from-phase0>" />
-  <PackageReference Include="Azure.AI.Projects" Version="<from-phase0>" />
-  <PackageReference Include="Azure.Identity" Version="1.13.1" />
+  <PackageReference Include="Microsoft.Agents.AI" Version="1.9.0" />
+  <PackageReference Include="Microsoft.Agents.AI.Foundry" Version="1.9.0-preview.260603.1" />
+  <PackageReference Include="Azure.AI.Projects" Version="2.1.0-beta.3" />
+  <PackageReference Include="Azure.Identity" Version="1.21.0" />
   <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.8" />
   <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.8" />
   <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.8" />
@@ -824,7 +826,7 @@ git commit -m "feat(agent): scoped conversation facade over one thread"
 
 ## Phase 4 — Agent factory + Foundry run adapter (against the Phase 0-confirmed surface)
 
-> Thin layers over the Responses-path SDK. Use the **exact** `AsAIAgent` signature recorded in `phase0-findings.md`; the code below reflects the design's reference snippets and may need a one-line adjustment per findings. The persona read/validation (Task 4.1) **is** unit-tested — it is pure I/O + a guard and carries the fail-at-boot contract; the SDK-marshalling parts (`AsAIAgent`, `RunAsync`) are not (covered by the Phase 7 integration test). Build is the gate for the marshalling code.
+> Thin layers over the Responses-path SDK. The code below now reflects the **Phase 0-confirmed** surface (`phase0-findings.md` §0.1–0.3) — the `AsAIAgent` signature, the `AgentSession`/`AgentResponse` run primitives, the `ClientResultException` block contract, and the `.UseOpenTelemetry()` tracing decorator. The persona read/validation (Task 4.1) **is** unit-tested — it is pure I/O + a guard and carries the fail-at-boot contract; the SDK-marshalling parts (`AsAIAgent`, `RunAsync`) are not (covered by the Phase 7 integration test). Build is the gate for the marshalling code.
 
 ### Task 4.1: `MeteorologistAgentFactory` — read + validate persona, build the `AIAgent`
 
@@ -882,6 +884,7 @@ public class MeteorologistAgentFactoryTests
 using Azure.AI.Projects;
 using Azure.Identity;
 using Microsoft.Agents.AI;
+using Microsoft.Extensions.AI;        // AsBuilder() / UseOpenTelemetry() on the inner IChatClient
 using Microsoft.Extensions.Options;
 
 namespace Agent.Foundry;
@@ -903,17 +906,24 @@ public sealed class MeteorologistAgentFactory(IOptions<AgentOptions> options)
         return persona;
     }
 
-    /// <summary>Builds the in-process agent. Creates NO server-side resource. [phase0: confirm AsAIAgent signature/version]</summary>
+    /// <summary>Builds the in-process agent. Creates NO server-side resource (Phase 0 confirmed: yields a ChatClientAgent).</summary>
     public AIAgent Create()
     {
         var persona = ReadPersona();
         var project = new AIProjectClient(new Uri(_o.ProjectEndpoint), new DefaultAzureCredential());
-        return project.AsAIAgent(model: _o.ModelDeploymentName, name: _o.AgentName, instructions: persona);
+
+        // Phase 0.3: gen_ai spans only appear when the inner IChatClient is decorated with
+        // .UseOpenTelemetry() via the clientFactory hook — Phase 6 registers the source it emits.
+        return project.AsAIAgent(
+            model: _o.ModelDeploymentName,
+            instructions: persona,
+            name: _o.AgentName,
+            clientFactory: inner => inner.AsBuilder().UseOpenTelemetry().Build());
     }
 }
 ```
 
-> If Phase 0 shows `AsAIAgent` is async or has a different parameter shape, adjust the one `Create()` line (and make `Create` async). `ReadPersona` and its tests are unaffected.
+> Phase 0 confirmed `AsAIAgent` is a **synchronous** extension method returning `AIAgent` (concrete `ChatClientAgent`), so `Create` stays sync. **Positional order is `(model, instructions, name, …)`** — always call with named arguments (as above). The `clientFactory` parameter (`Func<IChatClient, IChatClient>`) is what wires tracing; see `notes/phase0-findings.md` §0.1/§0.3.
 
 - [ ] **Step 4: Run to verify pass** → PASS (3 tests).
 
@@ -929,40 +939,57 @@ git commit -m "feat(agent): persona-reading AIAgent factory (fail-fast on missin
 **Files:**
 - Create: `src/Agent/Foundry/FoundryAgentRunner.cs`
 
-- [ ] **Step 1: Implement** — wrap the injected in-process `AIAgent`; map the run to `RunResult`. The **block→`RunState.Blocked`** mapping uses the contract recorded in Phase 0.2 (it may differ on the Responses path).
+- [ ] **Step 1: Implement** — wrap the injected in-process `AIAgent`; map the run to `RunResult`. The **block→`RunState.Blocked`** mapping uses the `ClientResultException` contract **confirmed in Phase 0.2 on this exact path**.
 
 ```csharp
+using System.ClientModel;       // ClientResultException — the OpenAI v2 SDK throws this, NOT Azure.RequestFailedException
+using System.Text.Json;         // parse the structured content-filter body
 using Agent.Running;
-using Azure;
 using Microsoft.Agents.AI;
 
 namespace Agent.Foundry;
 
 public sealed class FoundryAgentRunner(AIAgent agent) : IFoundryAgentRunner
 {
-    public Task<object> StartThreadAsync(CancellationToken ct)
-        => Task.FromResult<object>(agent.GetNewThread());
+    // Phase 0 confirmed the run primitive is AgentSession (created async), not AgentThread/GetNewThread.
+    public async Task<object> StartThreadAsync(CancellationToken ct)
+        => await agent.CreateSessionAsync(ct);
 
     public async Task<RunResult> SendAsync(object thread, string userText, CancellationToken ct)
     {
         try
         {
-            var response = await agent.RunAsync(userText, (AgentThread)thread, cancellationToken: ct);
+            // Phase 0 confirmed the 2-arg RunAsync(text, session) → AgentResponse.
+            // Thread `ct` through once the CancellationToken overload is verified at build.
+            var response = await agent.RunAsync(userText, (AgentSession)thread);
             return new RunResult(RunState.Completed, response.Text, GuardrailMetadata: null, ErrorCode: null);
         }
-        catch (RequestFailedException ex) when (ex.ErrorCode == "content_filter") // [phase0: confirm block contract on the Responses path]
+        catch (ClientResultException ex) when (ex.Status == 400 && IsContentFilter(ex)) // Phase 0.2 contract
         {
-            return new RunResult(RunState.Blocked, null, GuardrailMetadata: ex.Message, ErrorCode: ex.ErrorCode);
+            // NFR #7: the granular signal (content_filters[].content_filter_results.jailbreak.filtered)
+            // is reachable in ex.GetRawResponse().Content if a finer-grained metadata string is wanted.
+            return new RunResult(RunState.Blocked, null, GuardrailMetadata: "content_filter", ErrorCode: "content_filter");
         }
-        catch (RequestFailedException ex)
+        catch (ClientResultException ex)
         {
-            return new RunResult(RunState.Failed, null, null, ex.ErrorCode);
+            return new RunResult(RunState.Failed, null, null, ErrorCode: ex.Status.ToString());
         }
+    }
+
+    // Detection contract from phase0-findings.md §0.2 — match the structured error.code, NOT ex.Message (localized prose).
+    static bool IsContentFilter(ClientResultException ex)
+    {
+        var body = ex.GetRawResponse()?.Content;
+        if (body is null) return false;
+        using var doc = JsonDocument.Parse(body);
+        return doc.RootElement.TryGetProperty("error", out var err)
+            && err.TryGetProperty("code", out var code)
+            && code.GetString() == "content_filter";
     }
 }
 ```
 
-> If Phase 0.2 shows a block does **not** throw but instead returns a response carrying a filter annotation, branch on that annotation instead of the `catch`. The `IFoundryAgentRunner` contract and all Phase 3 tests are unaffected.
+> Phase 0.2 confirmed a block **throws** `System.ClientModel.ClientResultException` (`Status == 400`, raw-body `error.code == "content_filter"`, `jailbreak.filtered == true`) — **not** `Azure.RequestFailedException`. The catch above mirrors `phase0-findings.md` §0.2; do **not** string-match `ex.Message`. The `IFoundryAgentRunner` contract and all Phase 3 tests are unaffected.
 
 - [ ] **Step 2: Build** → PASS.
 
@@ -1178,32 +1205,27 @@ git commit -m "feat(web): Gislefoss chat page"
 
 ## Phase 6 — Observability (App Insights / OpenTelemetry GenAI tracing)
 
-### Task 6.1: Enable GenAI tracing and export the agent source
+### Task 6.1: Export the agent's GenAI ActivitySource to App Insights
 
 **Files:**
-- Modify: `src/Web/Program.cs` (before `builder.AddOpenTelemetry();`)
-- Modify: `src/Library/...` OpenTelemetry config to add the agent ActivitySource (use the source name from `phase0-findings.md`)
+- Modify: `src/Library/...` OpenTelemetry config to add the agent ActivitySource (`Experimental.Microsoft.Extensions.AI`, per `phase0-findings.md` §0.3)
 
-- [ ] **Step 1: Turn on the experimental GenAI switch** — at the very top of `Program.Main`, before any agent client is built:
+> **No `AppContext` switch.** Phase 0.3 confirmed `AppContext.SetSwitch("Azure.Experimental.EnableGenAITracing", true)` emits **nothing** on this path — the agent routes the model call through the `Microsoft.Extensions.AI` `IChatClient` pipeline, not the Azure SDK inference client, so that switch is irrelevant. The gen_ai spans come from the **`.UseOpenTelemetry()` decorator** added to the inner `IChatClient` in **Phase 4.1's `Create()`** (`clientFactory`). Phase 6 only has to register the source those spans use — there is **no `Program.cs` change** in this phase.
 
-```csharp
-AppContext.SetSwitch("Azure.Experimental.EnableGenAITracing", true);
-```
-
-- [ ] **Step 2: Add the agent ActivitySource to the tracer** — in Library's `AddOpenTelemetry` (where `AddAzureMonitorTraceExporter`/`UseAzureMonitor` is configured), add the source recorded in Phase 0:
+- [ ] **Step 1: Add the agent ActivitySource to the tracer** — in Library's `AddOpenTelemetry` (where `AddAzureMonitorTraceExporter`/`UseAzureMonitor` is configured), add the source confirmed in Phase 0.3:
 
 ```csharp
-.WithTracing(t => t.AddSource("<agent-source-name-from-phase0>"))
+.WithTracing(t => t.AddSource("Experimental.Microsoft.Extensions.AI"))
 ```
 
-- [ ] **Step 3: Confirm the connection string flows** — `APPLICATIONINSIGHTS_CONNECTION_STRING` is already what Library's exporter reads; the Bicep plan injects it and connects the same App Insights resource to the Foundry project. No code change beyond ensuring the env var is present.
+- [ ] **Step 2: Confirm the connection string flows** — `APPLICATIONINSIGHTS_CONNECTION_STRING` is already what Library's exporter reads; the Bicep plan injects it and connects the same App Insights resource to the Foundry project. No code change beyond ensuring the env var is present.
 
-- [ ] **Step 4: Build** → PASS.
+- [ ] **Step 3: Build** → PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add src/Web/Program.cs src/Library/
+git add src/Library/
 git commit -m "feat(obs): export Foundry GenAI agent traces to Application Insights"
 ```
 
@@ -1300,7 +1322,7 @@ The persona's behaviour (weather-only, clarification, declines, emoji) is exerci
 ## Self-review
 
 - **Spec coverage:** Agent host/topology (Phases 1, 3–5) ✓; **NFR #4 persona** — git-versioned, passed in-process as `instructions` via `AsAIAgent`, with fail-at-boot on a missing/empty file (Phase 4) ✓ *(create-or-update-by-hash retired with the Responses-path pivot)*; NFR #5/#6 platform Guardrail — *enforced in the Bicep plan*, consumed here via `RunState.Blocked` (Phases 3–4) ✓; NFR #7 metadata on the run (Phase 4, gated by Phase 0) ✓; observability (Phase 6) ✓; NFR #8/#9 Bicep — *separate plan*. Gaps by design: infrastructure is the companion plan; **Phase 2 is superseded and slated for removal**.
-- **Placeholder scan:** the deferred specifics are the two Phase-0-gated SDK points — the `AsAIAgent` signature/version (Task 4.1) and the Guardrail `block` contract (Task 4.2 / Phase 0.2) — each marked `[phase0]` with a concrete fallback path; not open-ended TODOs.
+- **Placeholder scan:** the two formerly Phase-0-gated SDK points — the `AsAIAgent` signature (Task 4.1) and the Guardrail `block` contract (Task 4.2 / Phase 0.2) — are now **confirmed** against a live Foundry project (`notes/phase0-findings.md`); the `[phase0]` markers in the Phase 4 snippets are resolved. The only remaining build-time check is the `RunAsync` `CancellationToken` overload, flagged inline in Task 4.2.
 - **Type consistency:** `MeteorologistAgentFactory` (ReadPersona/Create), `IFoundryAgentRunner` (StartThreadAsync(ct)/SendAsync(thread,text,ct)), `RunResult(State,Text,GuardrailMetadata,ErrorCode)`, `RunState{Completed,Blocked,Failed}`, `AgentReply(Outcome,Text,GuardrailMetadata)`, `AgentOutcome{Answered,Blocked,Failed}`, `IMeteorologistConversation.SendAsync` — names are consistent across Phases 1, 3–7. (The superseded `IFoundryAgentAdmin`/`AgentDescriptor`/`AgentRegistry` from Phase 2 are excluded.)
 
 ---
