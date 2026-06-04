@@ -1,3 +1,4 @@
+using Agent;
 using Library;
 using Serilog;
 using Serilog.Debugging;
@@ -55,7 +56,12 @@ public class Program
 
             builder.Services.AddSingleton<Settings>(settings);
 
+            builder.Services.AddMeteorologistAgent(builder.Configuration);
+
             var app = builder.Build();
+
+            // Fail fast at boot if the persona is missing/empty (does not contact Azure).
+            app.Services.GetRequiredService<Agent.Foundry.MeteorologistAgentFactory>().ReadPersona();
 
             if (!app.Environment.IsDevelopment())
             {
