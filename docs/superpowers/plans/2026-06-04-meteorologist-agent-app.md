@@ -313,16 +313,16 @@ git commit -m "feat(agent): deterministic persona hash"
 
 > **⚠️ SUPERSEDED by the Responses-path pivot — do not execute these tasks.** This phase was implemented and merged in **PR #2**, but the Responses path has **no server-side agent resource**, so create-or-update-by-hash provisioning is no longer used. The persona-load + fail-fast-on-missing/empty behavior is **preserved in reshaped form** inside the Phase 4 `MeteorologistAgentFactory` (it reads + validates the persona, then builds the `AIAgent`; eager singleton ⇒ fail-at-boot). The original create-or-update design lives on in git history (PR #2 and the wiring-design doc).
 >
-> **Removal checklist (separate cleanup PR — NOT part of this docs revision):**
-> - [ ] `git rm src/Agent/PersonaHasher.cs`
-> - [ ] `git rm src/Agent/Provisioning/AgentDescriptor.cs`
-> - [ ] `git rm src/Agent/Provisioning/IFoundryAgentAdmin.cs`
-> - [ ] `git rm src/Agent/Provisioning/PersonaProvisioner.cs`
-> - [ ] `git rm src/Agent/Provisioning/IAgentRegistry.cs src/Agent/Provisioning/AgentRegistry.cs`
-> - [ ] `git rm src/Agent/Provisioning/PersonaProvisionerHostedService.cs`
-> - [ ] `git rm src/Agent.Tests/PersonaHasherTests.cs src/Agent.Tests/PersonaProvisionerTests.cs src/Agent.Tests/AgentRegistryTests.cs src/Agent.Tests/PersonaProvisionerHostedServiceTests.cs`
-> - [ ] `git rm src/Agent.Tests/Fakes/FakeFoundryAgentAdmin.cs`
-> - [ ] Confirm nothing else references `Agent.Provisioning` (the Phase 4 `AddMeteorologistAgent` no longer does); then `dotnet build` + `dotnet test` green.
+> **Removal checklist (performed by this cleanup PR):**
+> - [x] `git rm src/Agent/PersonaHasher.cs`
+> - [x] `git rm src/Agent/Provisioning/AgentDescriptor.cs`
+> - [x] `git rm src/Agent/Provisioning/IFoundryAgentAdmin.cs`
+> - [x] `git rm src/Agent/Provisioning/PersonaProvisioner.cs`
+> - [x] `git rm src/Agent/Provisioning/IAgentRegistry.cs src/Agent/Provisioning/AgentRegistry.cs`
+> - [x] `git rm src/Agent/Provisioning/PersonaProvisionerHostedService.cs`
+> - [x] `git rm src/Agent.Tests/PersonaHasherTests.cs src/Agent.Tests/PersonaProvisionerTests.cs src/Agent.Tests/AgentRegistryTests.cs src/Agent.Tests/PersonaProvisionerHostedServiceTests.cs`
+> - [x] `git rm src/Agent.Tests/Fakes/FakeFoundryAgentAdmin.cs`
+> - [x] Confirm nothing else references `Agent.Provisioning` (the Phase 4 `AddMeteorologistAgent` no longer does); then `dotnet build` + `dotnet test` green.
 >
 > The task detail below is retained only as the inventory of what was built and must be removed.
 
