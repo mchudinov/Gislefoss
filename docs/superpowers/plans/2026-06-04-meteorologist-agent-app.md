@@ -125,6 +125,8 @@ dotnet sln src/Gislefoss.slnx add src/Agent src/Agent.Tests
   <PackageReference Include="Microsoft.Agents.AI.Foundry" Version="1.9.0-preview.260603.1" />
   <PackageReference Include="Azure.AI.Projects" Version="2.1.0-beta.3" />
   <PackageReference Include="Azure.Identity" Version="1.21.0" />
+  <!-- AsBuilder()/UseOpenTelemetry() in Phase 4.1; flows in transitively via Microsoft.Agents.AI, pinned explicit -->
+  <PackageReference Include="Microsoft.Extensions.AI" Version="10.5.1" />
   <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.8" />
   <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.8" />
   <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.8" />
