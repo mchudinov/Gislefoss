@@ -838,7 +838,7 @@ git commit -m "feat(agent): scoped conversation facade over one thread"
 
 This is where the old `PersonaProvisionerHostedService` fail-fast now lives: the factory reads the persona file and throws on missing/empty (`ReadPersona`), then builds the in-process `AIAgent` (`Create`). `ReadPersona` is invoked eagerly at boot (Task 4.4) so a missing/empty persona **fails startup**; the `AIAgent` itself is built **lazily** on first chat turn, so the app still boots (and `/chat` still renders) when the Foundry endpoint is not configured locally.
 
-- [ ] **Step 1: Write the failing tests** — exercise the fail-fast contract via `ReadPersona`, with no Azure contact.
+- [x] **Step 1: Write the failing tests** — exercise the fail-fast contract via `ReadPersona`, with no Azure contact.
 
 ```csharp
 using Agent;
@@ -878,9 +878,9 @@ public class MeteorologistAgentFactoryTests
 }
 ```
 
-- [ ] **Step 2: Run to verify fail** — `--filter "FullyQualifiedName~MeteorologistAgentFactoryTests"` → FAIL.
+- [x] **Step 2: Run to verify fail** — `--filter "FullyQualifiedName~MeteorologistAgentFactoryTests"` → FAIL.
 
-- [ ] **Step 3: Implement** — `ReadPersona` is the tested guard; `Create` adds the SDK call.
+- [x] **Step 3: Implement** — `ReadPersona` is the tested guard; `Create` adds the SDK call.
 
 ```csharp
 using Azure.AI.Projects;
@@ -927,9 +927,9 @@ public sealed class MeteorologistAgentFactory(IOptions<AgentOptions> options)
 
 > Phase 0 confirmed `AsAIAgent` is a **synchronous** extension method returning `AIAgent` (concrete `ChatClientAgent`), so `Create` stays sync. **Positional order is `(model, instructions, name, …)`** — always call with named arguments (as above). The `clientFactory` parameter (`Func<IChatClient, IChatClient>`) is what wires tracing; see `notes/phase0-findings.md` §0.1/§0.3.
 
-- [ ] **Step 4: Run to verify pass** → PASS (3 tests).
+- [x] **Step 4: Run to verify pass** → PASS (3 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/Agent/Foundry/MeteorologistAgentFactory.cs src/Agent.Tests/MeteorologistAgentFactoryTests.cs
@@ -941,7 +941,7 @@ git commit -m "feat(agent): persona-reading AIAgent factory (fail-fast on missin
 **Files:**
 - Create: `src/Agent/Foundry/FoundryAgentRunner.cs`
 
-- [ ] **Step 1: Implement** — wrap the injected in-process `AIAgent`; map the run to `RunResult`. The **block→`RunState.Blocked`** mapping uses the `ClientResultException` contract **confirmed in Phase 0.2 on this exact path**.
+- [x] **Step 1: Implement** — wrap the injected in-process `AIAgent`; map the run to `RunResult`. The **block→`RunState.Blocked`** mapping uses the `ClientResultException` contract **confirmed in Phase 0.2 on this exact path**.
 
 ```csharp
 using System.ClientModel;       // ClientResultException — the OpenAI v2 SDK throws this, NOT Azure.RequestFailedException
@@ -993,9 +993,9 @@ public sealed class FoundryAgentRunner(AIAgent agent) : IFoundryAgentRunner
 
 > Phase 0.2 confirmed a block **throws** `System.ClientModel.ClientResultException` (`Status == 400`, raw-body `error.code == "content_filter"`, `jailbreak.filtered == true`) — **not** `Azure.RequestFailedException`. The catch above mirrors `phase0-findings.md` §0.2; do **not** string-match `ex.Message`. The `IFoundryAgentRunner` contract and all Phase 3 tests are unaffected.
 
-- [ ] **Step 2: Build** → PASS.
+- [x] **Step 2: Build** → PASS.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add src/Agent/Foundry/FoundryAgentRunner.cs
@@ -1008,7 +1008,7 @@ git commit -m "feat(agent): Foundry run adapter mapping block/fail to RunResult"
 - Create: `src/Agent/ServiceCollectionExtensions.cs`
 - Test: `src/Agent.Tests/ServiceRegistrationTests.cs`
 
-- [ ] **Step 1: Write the failing test** (registrations are present and options bind — without resolving the eager `AIAgent`)
+- [x] **Step 1: Write the failing test** (registrations are present and options bind — without resolving the eager `AIAgent`)
 
 ```csharp
 using Agent;
@@ -1048,9 +1048,9 @@ public class ServiceRegistrationTests
 }
 ```
 
-- [ ] **Step 2: Run to verify fail** → FAIL.
+- [x] **Step 2: Run to verify fail** → FAIL.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```csharp
 using Agent.Foundry;
@@ -1080,9 +1080,9 @@ public static class ServiceCollectionExtensions
 }
 ```
 
-- [ ] **Step 4: Run to verify pass** → PASS. (The test asserts registrations and binds options but does **not** resolve `AIAgent`/`IMeteorologistConversation`, so it neither reads the persona nor builds an `AIProjectClient`.)
+- [x] **Step 4: Run to verify pass** → PASS. (The test asserts registrations and binds options but does **not** resolve `AIAgent`/`IMeteorologistConversation`, so it neither reads the persona nor builds an `AIProjectClient`.)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/Agent/ServiceCollectionExtensions.cs src/Agent.Tests/ServiceRegistrationTests.cs
@@ -1096,20 +1096,20 @@ git commit -m "feat(agent): AddMeteorologistAgent DI extension"
 
 > The persona already ships to the app's output root — `src/Web/Web.csproj` copies `personas\gislefoss.md` via `<None Update=...>` (PR #3). No csproj change here.
 
-- [ ] **Step 1: Register the agent** — in `src/Web/Program.cs`, after `builder.Services.AddSingleton<Settings>(settings);`:
+- [x] **Step 1: Register the agent** — in `src/Web/Program.cs`, after `builder.Services.AddSingleton<Settings>(settings);`:
 
 ```csharp
 builder.Services.AddMeteorologistAgent(builder.Configuration);
 ```
 
-- [ ] **Step 2: Force eager persona validation (fail-at-boot)** — after `var app = builder.Build();` and before `app.Run();`, validate the persona at startup so a missing/empty file fails the app **at boot**. This reads the file only — it does **not** build the `AIProjectClient`, so the app still boots (and `/chat` still renders) when the Foundry endpoint isn't configured locally; the `AIAgent` is built lazily on the first chat turn.
+- [x] **Step 2: Force eager persona validation (fail-at-boot)** — after `var app = builder.Build();` and before `app.Run();`, validate the persona at startup so a missing/empty file fails the app **at boot**. This reads the file only — it does **not** build the `AIProjectClient`, so the app still boots (and `/chat` still renders) when the Foundry endpoint isn't configured locally; the `AIAgent` is built lazily on the first chat turn.
 
 ```csharp
 // Fail fast at boot if the persona is missing/empty (does not contact Azure).
 app.Services.GetRequiredService<Agent.Foundry.MeteorologistAgentFactory>().ReadPersona();
 ```
 
-- [ ] **Step 3: Add config** under `Settings` in `src/Web/appsettings.json` (the real endpoint/deployment come from user secrets / `appsettings.Development*.json`, which are gitignored — do not commit keys):
+- [x] **Step 3: Add config** under `Settings` in `src/Web/appsettings.json` (the real endpoint/deployment come from user secrets / `appsettings.Development*.json`, which are gitignored — do not commit keys):
 
 ```json
 "Agent": {
@@ -1120,9 +1120,9 @@ app.Services.GetRequiredService<Agent.Foundry.MeteorologistAgentFactory>().ReadP
 }
 ```
 
-- [ ] **Step 4: Build** → `dotnet build src/Gislefoss.slnx` → PASS.
+- [x] **Step 4: Build** → `dotnet build src/Gislefoss.slnx` → PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/Web/Program.cs src/Web/appsettings.json
