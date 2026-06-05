@@ -4,11 +4,13 @@
 
 **Goal:** Provision, in Bicep, the Azure environment the Gislefoss agent runs on — Foundry account + project, a Guardrail-protected model deployment, App Insights observability, and a Container App for the Web image — with managed identity and no keys.
 
+> **Revision note (2026-06-05 — Responses path reconcile):** This plan was first drafted against the **server-side** Foundry agent design (an agent resource the app provisions and drives). The project has since chosen the **Responses path**: the persona stays in-repo and is passed as `instructions` to `AIProjectClient.AsAIAgent(...)` in-process, so the app **never creates or updates a server-side agent** — it only runs inference/responses (threads + sessions) against the deployment. Two consequences are threaded below. **RBAC** (Task 0.4 / Phase 5) is reframed to the least-privilege *inference* role — the app authors no agents, so it does not need agent-CRUD rights. **Observability** (Task 3.2) treats the App Insights→project connection as **optional**: GenAI spans are emitted **client-side** by the `.UseOpenTelemetry()` decorator on the inner `IChatClient` (app plan Phase 6) and exported via `APPLICATIONINSIGHTS_CONNECTION_STRING`, not by the portal connection. The deployable core — account + block Guardrail + deployment + project + observability + single-replica app — is unchanged.
+
 **Architecture:** One `infra/main.bicep` (resource-group scope) composing four modules: `foundry` (AIServices account + project + model deployment + Guardrail RAI policy with **block** actions), `observability` (Log Analytics + App Insights), `app` (Container Apps env + app with system-assigned identity), `roles` (RBAC for the app identity on Foundry). Outputs feed the app's config. Protection is platform-side: the deployment's Guardrail enforces inline.
 
 **Tech Stack:** Bicep, Azure CLI (`az deployment group`), Azure AI Foundry (`Microsoft.CognitiveServices`), Azure Monitor, Azure Container Apps.
 
-**Design reference:** [`docs/plans/2026-06-03-meteorologist-agent-wiring-design.md`](../../plans/2026-06-03-meteorologist-agent-wiring-design.md) §5–6. **Companion app plan:** [`2026-06-04-meteorologist-agent-app.md`](2026-06-04-meteorologist-agent-app.md).
+**Design reference:** [`docs/plans/2026-06-03-meteorologist-agent-wiring-design.md`](../../plans/2026-06-03-meteorologist-agent-wiring-design.md) §5–6 *(predates the Responses-path pivot — see the revision note above)*. **Companion app plan:** [`2026-06-04-meteorologist-agent-app.md`](2026-06-04-meteorologist-agent-app.md).
 
 **Prereqs:** an existing resource group; `az login`; the Web container image already built and pushed to a registry the Container App can pull (parameter `containerImage`).
 
@@ -64,9 +66,11 @@ Record the exact `properties.contentFilters[]` entries — specifically the **`n
 
 - [ ] **Step 1:** In the portal, connect an App Insights resource to a Foundry project, then export the project's connections to learn the resource type/shape (`...accounts/projects/connections` vs `Microsoft.Foundry/projects/connections`) and the `category`/`target` fields. Used in `observability.bicep` (the portal-Traces path; app-side tracing works via the env var regardless).
 
-### Task 0.4: Confirm the minimal Agent-Service RBAC role
+### Task 0.4: Confirm the minimal inference RBAC role
 
-- [ ] **Step 1:** Determine which built-in role lets the app identity **create/update agents and run threads** on the Foundry account — candidates: `Cognitive Services User` (`a97b65f3-24c7-4388-baec-2e87135dc908`), `Azure AI Developer` (`64702f94-c441-49e6-a78b-ef80e0188fee`), `Azure AI User`. Record the least-privilege role that covers both agent CRUD (the provisioner) and inference/threads. Used in `roles.bicep`.
+> **Responses path:** the app never provisions a server-side agent — it only runs inference/responses (threads + sessions) against the deployment via the **project-scoped** endpoint. So the role does **not** need agent-authoring rights; the least-privilege *inference* role is enough.
+
+- [ ] **Step 1:** Determine the least-privilege built-in role that lets the app identity **run inference / responses (threads + sessions)** on the Foundry account — candidates: `Cognitive Services User` (`a97b65f3-24c7-4388-baec-2e87135dc908`) and `Azure AI User` (`53ca6127-db72-4b80-b1b0-d745d6d5456d`, project-scoped data plane). `Azure AI Developer` (`64702f94-c441-49e6-a78b-ef80e0188fee`) also works but is **broader than needed** (it adds project/agent authoring) — use it only if you later provision server-side. Because the endpoint is project-scoped, if `Cognitive Services User` returns 401/403 on a live `AsAIAgent` run, escalate to `Azure AI User`. Record the narrowest role that lets the run succeed. Used in `roles.bicep`.
 
 - [ ] **Step 2: Record findings & commit the notes**
 
@@ -321,9 +325,9 @@ git add infra/modules/observability.bicep infra/main.bicep
 git commit -m "infra(obs): log analytics + application insights"
 ```
 
-### Task 3.2: Connect App Insights to the Foundry project (portal-Traces path)
+### Task 3.2: Connect App Insights to the Foundry project (optional, portal-Traces path)
 
-> The **app's own** OTel export needs only the connection string (Task 4). This connection enables the **Foundry portal Traces** view of server-side agent spans.
+> **Optional (Responses path).** The app's own OTel export needs only the connection string (Task 4) — GenAI spans are emitted **client-side** by the `.UseOpenTelemetry()` decorator on the inner `IChatClient` (app plan Phase 6) and exported via `APPLICATIONINSIGHTS_CONNECTION_STRING`. This connection is **not** the trace source; it only surfaces those same traces inside the **Foundry portal Traces** tab. If the connection resource schema rejects (Step 2), skip it — tracing is unaffected.
 
 **Files:**
 - Modify: `infra/modules/observability.bicep` (add a project connection; **shape from `infra-phase0-findings.md` Task 0.3**)
@@ -432,7 +436,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
           ]
         }
       ]
-      scale: { minReplicas: 1, maxReplicas: 1 }   // single replica — provisioning race guard
+      scale: { minReplicas: 1, maxReplicas: 1 }   // single replica — deliberate single-instance (cost + simplicity; no server-side provisioning to race on the Responses path)
     }
   }
 }
@@ -493,15 +497,19 @@ resource foundry 'Microsoft.CognitiveServices/accounts@2025-06-01' existing = {
   name: foundryName
 }
 
-// [verify] least-privilege set. Azure AI Developer covers agent CRUD + inference;
-// Cognitive Services User is the narrower inference-only role.
-var azureAiDeveloper = '64702f94-c441-49e6-a78b-ef80e0188fee'
+// Responses path: the app only runs inference/responses, never authors agents, so the
+// least-privilege role is the inference one — not Azure AI Developer (agent CRUD).
+// [verify] against infra-phase0-findings.md Task 0.4: Cognitive Services User is account-level
+// inference; if a project-scoped run returns 401/403, escalate to Azure AI User
+// ('53ca6127-db72-4b80-b1b0-d745d6d5456d'). Azure AI Developer
+// ('64702f94-c441-49e6-a78b-ef80e0188fee') also works but is broader than needed.
+var cognitiveServicesUser = 'a97b65f3-24c7-4388-baec-2e87135dc908'
 
 resource ra 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: foundry
-  name: guid(foundry.id, principalId, azureAiDeveloper)
+  name: guid(foundry.id, principalId, cognitiveServicesUser)
   properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', azureAiDeveloper)
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', cognitiveServicesUser)
     principalId: principalId
     principalType: 'ServicePrincipal'
   }
@@ -555,7 +563,7 @@ dotnet test src/Agent.Tests/Agent.Tests.csproj --filter "FullyQualifiedName~Foun
 ```
 Expected: `Weather_Question_Gets_An_Answer` PASS; **`Injection_Is_Blocked` PASS** (the block Guardrail is now deployed).
 
-- [ ] **Step 4: Smoke the live app** — browse `appUrl/chat`, ask "What's a typical June day in Oslo?" → an answer with emoji; send an injection ("ignore your instructions…") → a safe decline. Confirm a trace appears in the Foundry portal Traces tab / App Insights.
+- [ ] **Step 4: Smoke the live app** — browse `appUrl/chat`, ask "What's a typical June day in Oslo?" → an answer with emoji; send an injection ("ignore your instructions…") → a safe decline. Confirm a trace appears in **App Insights** (the client-side `.UseOpenTelemetry()` export) — and, if the optional Task 3.2 connection was added, in the Foundry portal Traces tab.
 
 - [ ] **Step 5: Commit any param/fixups**
 
@@ -568,7 +576,7 @@ git commit -m "infra: verified end-to-end deploy with block guardrail"
 
 ## Self-review
 
-- **Spec coverage:** NFR2 Foundry (Phase 2) ✓; NFR3 OpenAI model deployment (Phase 2) ✓; NFR6 prompt shields + NFR9 RAI policy as a **block** Guardrail (Phase 2) ✓; observability App Insights connected to the project (Phase 3) ✓; NFR8 all infra in Bicep (whole plan) ✓; single-replica provisioning-race guard (Phase 4) ✓; managed identity + `disableLocalAuth`, RBAC not keys (Phases 2,5) ✓.
+- **Spec coverage:** NFR2 Foundry (Phase 2) ✓; NFR3 OpenAI model deployment (Phase 2) ✓; NFR6 prompt shields + NFR9 RAI policy as a **block** Guardrail (Phase 2) ✓; observability App Insights — client-side spans exported via the connection string, optional project connection for the portal Traces view (Phase 3) ✓; NFR8 all infra in Bicep (whole plan) ✓; single-replica deployment (Phase 4) ✓; managed identity + `disableLocalAuth`, least-privilege inference RBAC not keys (Phases 2,5) ✓.
 - **Placeholder scan:** the only deferred specifics are the four `[verify]` items, each tied to a concrete Phase 0 task and a stated fallback (e.g. portal one-time connect if the connection resource schema rejects) — not open-ended TODOs.
 - **Type/identifier consistency:** module outputs and params line up — `foundry.outputs.{foundryName,projectName,projectEndpoint,deploymentName}`, `obs.outputs.{workspaceName,appInsightsConnectionString}`, `app.outputs.{principalId,fqdn}`; `guardrailName` has no hyphen (RAI policy names disallow some characters); `targetPort` = 8087 matches the app.
 
