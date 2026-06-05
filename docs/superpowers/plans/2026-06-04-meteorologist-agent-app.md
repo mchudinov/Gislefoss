@@ -1219,17 +1219,17 @@ git commit -m "feat(web): Gislefoss chat page"
 
 > **No `AppContext` switch.** Phase 0.3 confirmed `AppContext.SetSwitch("Azure.Experimental.EnableGenAITracing", true)` emits **nothing** on this path — the agent routes the model call through the `Microsoft.Extensions.AI` `IChatClient` pipeline, not the Azure SDK inference client, so that switch is irrelevant. The gen_ai spans come from the **`.UseOpenTelemetry()` decorator** added to the inner `IChatClient` in **Phase 4.1's `Create()`** (`clientFactory`). Phase 6 only has to register the source those spans use — there is **no `Program.cs` change** in this phase.
 
-- [ ] **Step 1: Add the agent ActivitySource to the tracer** — in Library's `AddOpenTelemetry` (where `AddAzureMonitorTraceExporter`/`UseAzureMonitor` is configured), add the source confirmed in Phase 0.3:
+- [x] **Step 1: Add the agent ActivitySource to the tracer** — in Library's `AddOpenTelemetry` (where `AddAzureMonitorTraceExporter`/`UseAzureMonitor` is configured), add the source confirmed in Phase 0.3. Added `.AddSource("Experimental.Microsoft.Extensions.AI")` to the **existing** `WithTracing` block (rather than chaining a second `WithTracing`), alongside the AspNetCore/HttpClient instrumentation:
 
 ```csharp
 .WithTracing(t => t.AddSource("Experimental.Microsoft.Extensions.AI"))
 ```
 
-- [ ] **Step 2: Confirm the connection string flows** — `APPLICATIONINSIGHTS_CONNECTION_STRING` is already what Library's exporter reads; the Bicep plan injects it and connects the same App Insights resource to the Foundry project. No code change beyond ensuring the env var is present.
+- [ ] **Step 2: Confirm the connection string flows** — `APPLICATIONINSIGHTS_CONNECTION_STRING` is already what Library's exporter reads (confirmed: the whole `AddOpenTelemetry`/`UseAzureMonitor` block is gated on it); the Bicep plan injects it and connects the same App Insights resource to the Foundry project. No code change beyond ensuring the env var is present — **deferred to the Bicep infra phase**.
 
-- [ ] **Step 3: Build** → PASS.
+- [x] **Step 3: Build** → PASS (`dotnet build src/Gislefoss.slnx` → 0 errors; pre-existing NU1510 warnings only).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/Library/
