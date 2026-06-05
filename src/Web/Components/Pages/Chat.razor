@@ -1,0 +1,53 @@
+@page "/chat"
+@rendermode InteractiveServer
+@using Agent
+@using Agent.Running
+@inject IMeteorologistConversation Conversation
+
+<PageTitle>Gislefoss</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.Small" Class="mt-4">
+    <MudStack Spacing="2">
+        @foreach (var line in _transcript)
+        {
+            <MudPaper Class="pa-3" Elevation="0" Outlined="true">
+                <MudText Typo="Typo.caption">@(line.FromUser ? "You" : "Gislefoss")</MudText>
+                <MudText>@line.Text</MudText>
+            </MudPaper>
+        }
+        <MudTextField @bind-Value="_input" Label="Ask about the weather" Variant="Variant.Outlined"
+                      Disabled="_busy" OnKeyDown="@(e => { if (e.Key == "Enter") _ = Send(); })" />
+        <MudButton OnClick="Send" Disabled="_busy" Variant="Variant.Filled" Color="Color.Primary">Send</MudButton>
+    </MudStack>
+</MudContainer>
+
+@code {
+    private readonly List<(bool FromUser, string Text)> _transcript = new();
+    private string _input = "";
+    private bool _busy;
+
+    private async Task Send()
+    {
+        var text = _input.Trim();
+        if (string.IsNullOrEmpty(text) || _busy) return;
+
+        _busy = true;
+        _transcript.Add((true, text));
+        _input = "";
+        try
+        {
+            var reply = await Conversation.SendAsync(text, CancellationToken.None);
+            _transcript.Add((false, reply.Text));
+        }
+        catch (Exception)
+        {
+            // The agent (and its Foundry endpoint) is realized on first send; surface failures in the
+            // transcript rather than tearing down the interactive circuit.
+            _transcript.Add((false, "Sorry — I couldn't reach the weather service just now."));
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

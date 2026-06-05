@@ -1137,9 +1137,12 @@ git commit -m "feat(web): register the meteorologist agent and validate persona 
 
 **Files:**
 - Create: `src/Web/Components/Pages/Chat.razor`
-- Modify: `src/Web/Components/Layout/NavMenu.razor` (add a link, if a nav menu exists)
+- Modify: `src/Web/Components/Layout/MainLayout.razor` (no `NavMenu.razor` exists; the nav lives in the `MudAppBar` — added a `/chat` link there)
+- Modify: `src/Agent/Foundry/FoundryAgentRunner.cs` + `src/Agent/ServiceCollectionExtensions.cs` (see note below)
 
-- [ ] **Step 1: Implement the page** (MudBlazor; calls the scoped facade; renders the transcript)
+> **Required wiring fix (Phase 4 touch).** As written in Phase 4, `IFoundryAgentRunner → FoundryAgentRunner(AIAgent)` is a singleton that takes the `AIAgent` by constructor. Prerendering `/chat` resolves `IMeteorologistConversation → runner → AIAgent → Create()`, which runs `new Uri(ProjectEndpoint)` and throws on the shipped empty endpoint — so the page would 500, breaking Step 2's "no Azure needed to load." Fix: make the runner take `Func<AIAgent>` and resolve the agent on first send; register `IFoundryAgentRunner` via a factory (`new FoundryAgentRunner(() => sp.GetRequiredService<AIAgent>())`). The `AIAgent` stays a singleton, so `Create()` still runs at most once, on the first message. Tests unaffected (no test constructs the real runner; `ServiceRegistrationTests` asserts registration without resolving). `Chat.razor`'s `Send()` also gets a `catch` so a send with no endpoint surfaces a message instead of tearing down the circuit.
+
+- [x] **Step 1: Implement the page** (MudBlazor; calls the scoped facade; renders the transcript)
 
 ```razor
 @page "/chat"
@@ -1191,15 +1194,17 @@ git commit -m "feat(web): register the meteorologist agent and validate persona 
 }
 ```
 
-- [ ] **Step 2: Run the app and smoke-test the render** (no Azure needed for the page to load)
+- [x] **Step 2: Run the app and smoke-test the render** (no Azure needed for the page to load)
 
 Run: `dotnet run --project src/Web`
 Expected: `/chat` renders the input and button without error. (Sending requires a configured Foundry endpoint — verified in Phase 7.)
+Verified: with the shipped empty `Settings:Agent` config, `GET http://localhost:8087/chat` → **200**, body contains the "Ask about the weather" label (component actually rendered) and the "Gislefoss" title.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
-git add src/Web/Components/Pages/Chat.razor src/Web/Components/Layout/NavMenu.razor
+git add src/Web/Components/Pages/Chat.razor src/Web/Components/Layout/MainLayout.razor \
+        src/Agent/Foundry/FoundryAgentRunner.cs src/Agent/ServiceCollectionExtensions.cs
 git commit -m "feat(web): Gislefoss chat page"
 ```
 
