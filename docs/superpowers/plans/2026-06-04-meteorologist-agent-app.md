@@ -1247,7 +1247,7 @@ git commit -m "feat(obs): export Foundry GenAI agent traces to Application Insig
 **Files:**
 - Create: `src/Agent.Tests/Integration/FoundryEndToEndTests.cs`
 
-- [ ] **Step 1: Write the env-gated test** (skips unless a dev endpoint is configured)
+- [x] **Step 1: Write the env-gated test** (skips unless a dev endpoint is configured) — created `src/Agent.Tests/Integration/FoundryEndToEndTests.cs`. Adapted from the snippet below for the Phase 5 wiring change: `FoundryAgentRunner` now takes `Func<AIAgent>`, so `BuildConversation` passes `new FoundryAgentRunner(() => agent)`. `Injection_Is_Blocked` is `void` (its body is commented out pending the Bicep Guardrail), avoiding a CS1998 async-without-await warning.
 
 ```csharp
 using Agent;
@@ -1295,23 +1295,23 @@ public class FoundryEndToEndTests
 }
 ```
 
-- [ ] **Step 2: Add `Xunit.SkippableFact` package**
+- [x] **Step 2: Add `Xunit.SkippableFact` package** — added `Xunit.SkippableFact` 1.5.61 to `Agent.Tests.csproj` (compatible with the project's xUnit 2.9.3).
 
 ```bash
 dotnet add src/Agent.Tests package Xunit.SkippableFact
 ```
 
-- [ ] **Step 3: Run with the env set** (developer signed in via `az login`)
+- [ ] **Step 3: Run with the env set** (developer signed in via `az login`) — **deferred: requires a live Foundry project** (no endpoint available in this environment), and the persona file must be resolvable from the test working dir (see the file's NOTE).
 
 Run: `FOUNDRY_PROJECT_ENDPOINT=... FOUNDRY_MODEL_NAME=... dotnet test src/Agent.Tests/Agent.Tests.csproj --filter "FullyQualifiedName~FoundryEndToEndTests"`
 Expected: `Weather_Question_Gets_An_Answer` PASS; the injection test passes once the block Guardrail is deployed (Bicep plan).
 
-- [ ] **Step 4: Run the full suite unset** to confirm it skips cleanly
+- [x] **Step 4: Run the full suite unset** to confirm it skips cleanly — verified: `dotnet test src/Agent.Tests/Agent.Tests.csproj` → **11 passed, 0 failed, 2 skipped** (both `FoundryEndToEndTests` SKIP). No Azure contact.
 
 Run: `dotnet test src/Agent.Tests/Agent.Tests.csproj`
 Expected: all unit tests PASS; integration tests SKIPPED.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/Agent.Tests/Integration/FoundryEndToEndTests.cs src/Agent.Tests/Agent.Tests.csproj
