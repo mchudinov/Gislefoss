@@ -86,7 +86,11 @@ namespace Library
                     .WithTracing(traces =>
                     {
                         traces.AddAspNetCoreInstrumentation()
-                        .AddHttpClientInstrumentation();
+                        .AddHttpClientInstrumentation()
+                        // GenAI agent spans: emitted by the .UseOpenTelemetry() decorator on the inner
+                        // IChatClient (Agent's MeteorologistAgentFactory.Create). Source name confirmed in
+                        // phase0-findings.md §0.3. Content recording stays OFF (no prompt/response text).
+                        .AddSource("Experimental.Microsoft.Extensions.AI");
                     })
                     .ConfigureResource(resource => resource.AddService(serviceName: "worker"))
                     .UseOtlpExporter();
