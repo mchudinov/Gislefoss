@@ -406,3 +406,6 @@ FodyWeavers.xsd
 # JetBrains Rider
 *.sln.iml
 /helm/chart/example-net-console-0.1.0.tgz
+
+# Bicep compiled output — the .bicep files are the source of truth
+infra/**/*.json
