@@ -55,6 +55,8 @@ need a deploy and are flagged `[deploy-verify]` below.
   Inference Deployment Operator, Azure AI Safety Evaluator — none is the narrow "user/inference"
   role the reconcile assumed.)
 
+**Update (2026-06-07 — server-side migration):** RBAC now splits. The app's runtime identity keeps the least-privilege inference role (Cognitive Services User). A separate user-assigned identity used by the Bicep deployment-script provisioner gains an agent-author role (Azure AI Developer 64702f94-c441-49e6-a78b-ef80e0188fee, or "Foundry Project Manager" if narrower). See the 2026-06-07 migration plan.
+
 ## Note — provider metadata gaps (not blockers)
 
 `az provider show --namespace Microsoft.CognitiveServices` does **not** enumerate
