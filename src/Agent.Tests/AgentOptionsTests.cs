@@ -1,6 +1,5 @@
 using Agent;
 using Microsoft.Extensions.Configuration;
-using System.Collections.Generic;
 using Xunit;
 
 public class AgentOptionsTests
