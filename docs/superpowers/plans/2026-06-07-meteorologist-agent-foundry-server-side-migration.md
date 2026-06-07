@@ -2,37 +2,39 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Migrate the Gislefoss agent from the in-process **Responses path** (`AsAIAgent(...)`, persona in the container image) to a **server-side persistent Foundry agent**: the persona stays in git and is pushed to the agent on **every deploy**, the agent infrastructure is created **in Bicep** (Basic agent setup, Foundry-onboard storage — no BYO Cosmos/Storage/Search), and the Web app drives the agent by ID via `PersistentAgentsClient` (threads + runs).
+**Goal:** Migrate the Gislefoss agent from the in-process **Responses path** (`AIProjectClient.AsAIAgent(model, instructions, name)`, persona read from the container image at runtime) to a **server-side persistent Foundry agent**: the persona stays in git and is pushed to the agent on **every deploy**, the agent infrastructure is created **in Bicep** (Basic agent setup, Foundry-onboard storage — no BYO Cosmos/Storage/Search), and the already-built Web app drives the agent **by id** via `PersistentAgentsClient.GetAIAgentAsync(agentId)`.
 
-**Architecture:** Foundry's persistent agent has two parts that live in two planes. The **capability host** (`Microsoft.CognitiveServices/accounts/capabilityHosts` + `…/projects/capabilityHosts`, `capabilityHostKind: 'Agents'`) is an ARM/Bicep resource that turns on the Agent Service for the account+project; for Basic setup it omits the storage/thread/vector connection properties so Foundry-managed storage is used. The **agent definition** (name + persona `instructions` + model) is a **data-plane object** with no ARM resource type — it is created via the Agents SDK/REST. To honor "created in Bicep" *and* "persona pushed on each provision," a `Microsoft.Resources/deploymentScripts` resource (running under a user-assigned managed identity with agent-author rights) reads the persona via `loadTextContent()` and performs an **upsert-by-name** every deployment, then emits the server-generated **agent id** as a deployment output that `app.bicep` injects into the Web container as `Settings__Agent__AgentId`.
+> **⚠️ Premise correction (2026-06-07).** An earlier draft of this plan assumed "the agent runtime is not wired yet" (per stale CLAUDE.md prose). **That is false.** The full Responses-path implementation is already merged on `main`: `src/Agent/Foundry/MeteorologistAgentFactory.cs` (`AsAIAgent`), `src/Agent/Foundry/FoundryAgentRunner.cs`, `src/Agent/ServiceCollectionExtensions.cs`, `src/Web/Program.cs` wiring, and a passing test suite. This migration therefore **rewrites real merged code**, not just config/docs. Verified API: the Microsoft Agent Framework `.NET` surface (already referenced — `Microsoft.Agents.AI.Foundry` 1.9.0-preview) supports server-side agents via `PersistentAgentsClient.CreateAIAgentAsync(...)` / `GetAIAgentAsync(id)`, reachable from `AIProjectClient.GetPersistentAgentsClient()`. The returned object is a `ChatClientAgent` (an `AIAgent`), so the `AIAgent` abstraction — and thus `FoundryAgentRunner`/`MeteorologistConversation` — is **preserved**. The package change is additive (`Azure.AI.Agents.Persistent`), reversing the prior "no PersistentAgentsClient" preference deliberately.
 
-**Tech Stack:** Bicep (`capabilityHosts@2025-04-01-preview`, `deploymentScripts@2023-08-01`), a user-assigned managed identity, the Azure AI Agents data-plane SDK (`azure-ai-projects` / `azure-ai-agents`, run inside the deployment-script container), Azure CLI (`az deployment group`), and the existing `infra/` modules (`foundry`, `observability`, `app`, `roles`).
+**Architecture:** Foundry's persistent agent spans two planes. The **capability host** (`Microsoft.CognitiveServices/accounts/capabilityHosts` + `…/projects/capabilityHosts`, `capabilityHostKind: 'Agents'`) is an ARM/Bicep resource enabling the Agent Service for the account+project; Basic setup omits the storage/thread/vector connection properties so Foundry-managed storage is used. The **agent definition** (name + persona `instructions` + model) is a **data-plane object** with no ARM resource type — created via the Agents SDK/REST. To honor "created in Bicep" *and* "persona pushed on each provision," a `Microsoft.Resources/deploymentScripts` resource (running under a user-assigned managed identity with agent-author rights) reads the persona via `loadTextContent()` and performs an **upsert-by-name** every deployment, emitting the server-generated **agent id** as a deployment output that `app.bicep` injects as `Settings__Agent__AgentId`. The Web app retrieves that agent by id at runtime.
 
-**Builds on:** [`2026-06-04-meteorologist-agent-infra.md`](2026-06-04-meteorologist-agent-infra.md) (the deployed Responses-path stack this migrates) and its companion app plan [`2026-06-04-meteorologist-agent-app.md`](2026-06-04-meteorologist-agent-app.md). **Phase 0 findings:** [`notes/infra-phase0-findings.md`](notes/infra-phase0-findings.md).
+**Tech Stack:** .NET 10 (`Azure.AI.Agents.Persistent`, `Microsoft.Agents.AI[.Foundry]`, `Azure.AI.Projects`), Bicep (`capabilityHosts@2025-04-01-preview`, `deploymentScripts@2023-08-01`), a user-assigned managed identity, the Agents data-plane SDK in the deployment-script container, Azure CLI (`az deployment group`).
+
+**Builds on:** [`2026-06-04-meteorologist-agent-infra.md`](2026-06-04-meteorologist-agent-infra.md) (the deployed Responses-path stack this migrates) and [`2026-06-04-meteorologist-agent-app.md`](2026-06-04-meteorologist-agent-app.md). **Phase 0 findings:** [`notes/infra-phase0-findings.md`](notes/infra-phase0-findings.md).
 
 ---
 
-> **⚠️ Provisionality caveat — read first.** Every API version, role GUID, capability-host property, RAI-policy filter name, and SDK method name below is **reconstructed from documentation and may be wrong for your subscription's API versions / installed SDK** — treat the modules and the script as *shape, not truth*. The `az bicep build` → `what-if` → `create` gate in each phase is the arbiter: if it rejects a property, fix it against the live schema (`az provider show`, a portal export) rather than assuming the error is elsewhere. The `[verify]` markers are the *known* unknowns — not the only ones.
+> **⚠️ Provisionality caveat — read first.** Every API version, role GUID, capability-host property, RAI-policy filter name, and SDK method/signature below is **reconstructed from documentation and may be wrong for your subscription's API versions / installed SDK** — treat the modules and scripts as *shape, not truth*. The `az bicep build` → `what-if` → `create` gate and `dotnet build`/`test` are the arbiters. The `[verify]` markers are the *known* unknowns — not the only ones.
 
-> **⚠️ Deploy boundary.** Do **not** run `az deployment group what-if`/`create` against a live (e.g. corporate `AdraDevSubscription`) subscription without explicit authorization plus an agreed **subscription + resource group + region**. Every Phase's `what-if`/`create`/`deploy` step is gated on that decision. Offline gates (`az bicep build`, `dotnet build`/`test`, doc edits) are not gated.
+> **⚠️ Deploy boundary.** Do **not** run `az deployment group what-if`/`create` against a live (e.g. corporate `AdraDevSubscription`) subscription without explicit authorization plus an agreed **subscription + resource group + region**. Offline gates (`az bicep build`, `dotnet build`/`test`, doc edits) are not gated. **Phases 1–2 are fully offline; Phases 3–7 are deploy-gated.**
 
-> **ℹ️ What "in Bicep" costs here.** The `deploymentScripts` mechanism is heavier than "a script": each deployment spins up a **transient Azure Container Instance + a Storage account** and requires a **user-assigned managed identity** whose role assignment **must have propagated before the script fires** (the classic failure is a 403 from propagation lag — handled with `dependsOn` + an in-script retry). The lighter alternative — provisioning the agent from **app startup** — avoids the UAMI/ACI entirely but is *not* "in Bicep." This plan honors the "in Bicep" requirement; the cost is made explicit, not hidden.
+> **ℹ️ What "in Bicep" costs.** `deploymentScripts` spins up a transient Azure Container Instance + a Storage account per deploy and needs a **user-assigned managed identity** whose role assignment **must propagate before the script fires** (classic 403; handled with `dependsOn` + in-script retry). The lighter alternative — provisioning from app startup via `CreateAIAgentAsync` — avoids the UAMI/ACI but is *not* "in Bicep." This plan honors the "in Bicep" requirement.
 
-> **ℹ️ Why not the "hosted agent" ARM path.** Foundry also has a newer **hosted-agent** model (`agentDeployment` ARM resources) where the *agent's code/runtime* is hosted inside Foundry. That is a different topology from ours — our **Web app drives a persistent agent** while running its own UI/runtime. We deliberately take the persistent-agent + `deploymentScripts` route, not hosted agents.
+> **ℹ️ Tracing consequence.** `GetAIAgentAsync(id)` has **no `clientFactory` hook**, so the current client-side `.UseOpenTelemetry()` decoration (wired in `MeteorologistAgentFactory.Create`) does **not** carry over. GenAI traces on the server-side path come from **Foundry-side tracing surfaced via the App Insights→project connection** (infra Task 6.x, previously optional — now the recommended trace path). `[verify]`
 
 ---
 
 ## Decision reversal — what this supersedes
 
-This migration **reverses the Responses-path decision** recorded across the repo. Phase 1 updates every location so the repo is not self-contradictory. The locations are:
+This migration reverses the Responses-path decision recorded across the repo. Phase 1 updates every location.
 
 | Location | Current statement | After migration |
 | --- | --- | --- |
-| `docs/superpowers/plans/2026-06-04-meteorologist-agent-infra.md` (revision note) | "chosen the Responses path … never creates a server-side agent" | Superseded — link to this plan |
-| `docs/superpowers/plans/2026-06-04-meteorologist-agent-app.md` | app wiring targets `AsAIAgent(...)` Responses mode | App drives `PersistentAgentsClient.GetAgent(agentId)` + threads/runs |
-| `docs/superpowers/plans/notes/infra-phase0-findings.md` Task 0.4 | least-privilege = inference role only | Split RBAC: provisioning identity authors agents; runtime identity runs them |
-| `.claude` memory `agent-uses-responses-path.md` | "persona in-repo via AsAIAgent; no server-side agent" | Rewritten to the server-side path (Phase 1, Step 5) |
-| `CLAUDE.md` prose ("Foundry **Responses path** … persona passed in-process") | Responses path | Server-side persistent agent |
+| `CLAUDE.md` ("Current state" + "Responses path") | "no `AsAIAgent` call … runtime not wired"; "Responses path … persona in-process" | Code IS wired; now a **server-side persistent agent**, persona in git pushed by Bicep, app drives by id |
+| `docs/.../2026-06-04-meteorologist-agent-infra.md` (revision note) | "chosen the Responses path … never creates a server-side agent" | Superseded — link this plan |
+| `docs/.../2026-06-04-meteorologist-agent-app.md` | app wiring targets `AsAIAgent(...)` | App drives `GetAIAgentAsync(AgentId)` + threads/runs |
+| `docs/.../notes/infra-phase0-findings.md` Task 0.4 | least-privilege = inference role only | Split RBAC: provisioning UAMI authors; runtime identity runs |
+| `.claude` memory `agent-uses-responses-path.md` | "persona in-repo via AsAIAgent; no server-side agent" | Rewritten to the server-side path |
 
 ---
 
@@ -40,251 +42,357 @@ This migration **reverses the Responses-path decision** recorded across the repo
 
 | File | Responsibility | Change |
 | --- | --- | --- |
-| `infra/modules/foundry.bicep` | AIServices account, project, deployment, Guardrail | **Modify** — add account + project capability hosts (Basic) |
-| `infra/modules/identity.bicep` | User-assigned identity for the provisioning script | **Create** |
-| `infra/modules/roles.bicep` | Role assignments on Foundry | **Modify** — split: runtime (app) + provisioning (UAMI) |
-| `infra/modules/agent.bicep` | `deploymentScripts` upsert of the persistent agent | **Create** |
-| `infra/scripts/upsert-agent.py` | Data-plane upsert-by-name; emits agent id | **Create** (referenced inline by `agent.bicep`) |
+| `src/Agent/AgentOptions.cs` | Agent config binding | **Modify** — add `AgentId` *(done, Task 1.1)* |
+| `src/Agent.Tests/AgentOptionsTests.cs` | Config binding tests | **Modify** — assert `AgentId` binds *(done, Task 1.1)* |
+| `src/Agent/Agent.csproj` | Agent package refs | **Modify** — add `Azure.AI.Agents.Persistent` |
+| `src/Agent/Foundry/MeteorologistAgentFactory.cs` | Build/obtain the `AIAgent` | **Modify** — `Create()`→`CreateAsync()` via `GetAIAgentAsync(AgentId)`; drop runtime persona read |
+| `src/Agent/Foundry/FoundryAgentRunner.cs` | Drive threads/runs | **Modify** — `Func<AIAgent>`→`Func<Task<AIAgent>>` (await); mapping unchanged |
+| `src/Agent/ServiceCollectionExtensions.cs` | DI graph | **Modify** — memoized async agent provider |
+| `src/Web/Program.cs` | Host boot | **Modify** — drop eager `ReadPersona()`; agent retrieved lazily |
+| `src/Agent.Tests/MeteorologistAgentFactoryTests.cs` | Factory tests | **Modify** — replace persona tests with AgentId-guard test |
+| `src/Agent.Tests/ServiceRegistrationTests.cs` | DI tests | **Modify** — registration type changes |
+| `src/Agent.Tests/Integration/FoundryEndToEndTests.cs` | Live smoke | **Modify** — drive by AgentId |
+| `infra/modules/foundry.bicep` | Foundry account/project/deployment/Guardrail | **Modify** — add capability hosts (Basic) |
+| `infra/modules/identity.bicep` | UAMI for provisioning | **Create** |
+| `infra/modules/roles.bicep` | RBAC | **Modify** — split runtime + provisioning |
+| `infra/scripts/upsert-agent.py` | Data-plane upsert-by-name | **Create** |
+| `infra/modules/agent.bicep` | `deploymentScripts` wrapper | **Create** |
 | `infra/modules/app.bicep` | Container App | **Modify** — inject `Settings__Agent__AgentId` |
-| `infra/main.bicep` | Orchestrator | **Modify** — compose identity/agent, `loadTextContent` persona, thread outputs |
-| `src/Agent/AgentOptions.cs` | Agent config binding | **Modify** — add `AgentId` |
-| `src/Agent.Tests/AgentOptionsTests.cs` | Config binding tests | **Modify** — assert `AgentId` binds |
+| `infra/main.bicep` | Orchestrator | **Modify** — compose identity/agent, `loadTextContent` persona |
 
-**Commands used throughout:**
-- Compile (offline gate): `az bicep build --file infra/main.bicep`
-- Preview (deploy-gated): `az deployment group what-if -g <rg> -f infra/main.bicep -p infra/main.bicepparam`
-- Apply (deploy-gated): `az deployment group create -g <rg> -f infra/main.bicep -p infra/main.bicepparam`
-- .NET (offline gate): `dotnet build src/Gislefoss.slnx` / `dotnet test src/Gislefoss.slnx`
+**Commands:** offline gate `dotnet build src/Gislefoss.slnx` / `dotnet test src/Gislefoss.slnx`; Bicep gate `az bicep build --file infra/main.bicep`; deploy-gated `az deployment group what-if|create -g <rg> -f infra/main.bicep -p infra/main.bicepparam`.
 
 ---
 
-## Phase 0 — Confirm the version-sensitive schema
+## Phase 0 — Confirm version-sensitive schema (read-only; partly deploy-gated)
 
-> Output: append to `docs/superpowers/plans/notes/infra-phase0-findings.md`. These items vary by API version / installed SDK; confirm against your subscription before writing the modules that use them. Steps that touch a live subscription are deploy-gated.
+> Output: append to `docs/superpowers/plans/notes/infra-phase0-findings.md`.
 
-### Task 0.1: Confirm the capability-host API version + Basic-setup properties
+### Task 0.1: Capability-host API version + Basic properties
+- [ ] Run `az provider show --namespace Microsoft.CognitiveServices --query "resourceTypes[?resourceType=='accounts/capabilityHosts'].apiVersions" -o json` and the `accounts/projects/capabilityHosts` equivalent. Confirm `2025-04-01-preview` (or later) and that Basic omits `storageConnections`/`threadStorageConnections`/`vectorStoreConnections`. Used in `foundry.bicep`.
 
-- [ ] **Step 1:** Confirm the resource types and latest version exist for your subscription.
+### Task 0.2: Does the project capability host need `aiServicesConnections`?
+- [ ] Compare reference templates `40-basic-agent-setup` (single-account; our topology) vs `42-basic-agent-setup-with-customization` (BYO-AOAI). Record whether `aiServicesConnections` is required when the model deployment lives on the **same** account. `[verify]` in `foundry.bicep`.
 
-Run:
-```bash
-az provider show --namespace Microsoft.CognitiveServices \
-  --query "resourceTypes[?resourceType=='accounts/capabilityHosts'].apiVersions" -o json
-az provider show --namespace Microsoft.CognitiveServices \
-  --query "resourceTypes[?resourceType=='accounts/projects/capabilityHosts'].apiVersions" -o json
-```
-Record the latest version (plan assumes `2025-04-01-preview`). Confirm that for **Basic** (Foundry-onboard storage) the project capability host **omits** `storageConnections`, `threadStorageConnections`, `vectorStoreConnections`. Used in `foundry.bicep`.
+### Task 0.3: Agent-author RBAC role (provisioning identity)
+- [ ] Run `az role definition list --query "[?contains(roleName,'Azure AI') || contains(roleName,'Foundry')].{name:roleName,id:name}" -o table`. Record the narrowest agent-author role. Default **Azure AI Developer** `64702f94-c441-49e6-a78b-ef80e0188fee`; prefer "Foundry Project Manager" if narrower. ("Azure AI User" is absent in this tenant.) Used in `roles.bicep`.
 
-### Task 0.2: Confirm whether the project capability host needs `aiServicesConnections`
+### Task 0.4: .NET + data-plane agent SDK surface
+- [ ] Confirm against the installed packages: (a) `AIProjectClient.GetPersistentAgentsClient()` exists (else construct `new PersistentAgentsClient(endpoint, cred)` directly); (b) `PersistentAgentsClient.GetAIAgentAsync(agentId, chatOptions?, ct)` and `CreateAIAgentAsync(model, name, instructions, …)` signatures; (c) whether `Azure.AI.Agents.Persistent` must be referenced directly or is transitive via `Microsoft.Agents.AI.Foundry`; (d) whether the agent **id is stable** across same-name re-creates (drives the upsert strategy); (e) the Python `azure-ai-agents` upsert surface for the deployment script. Used in `MeteorologistAgentFactory.cs` and `infra/scripts/upsert-agent.py`.
 
-> The fetched sample `42-basic-agent-setup-with-customization` is the **BYO-AOAI** variant, so its project capability host lists `aiServicesConnections: ['<external-aoai-conn>']`. Our topology matches **`40-basic-agent-setup`**: the gpt-4o deployment lives on the *same* Foundry account as the project. Determine whether `aiServicesConnections` is required at all in that single-account case.
-
-- [ ] **Step 1:** Compare the two reference templates and record the answer.
-
-Run:
-```bash
-az rest --method get --url "https://raw.githubusercontent.com/microsoft-foundry/foundry-samples/main/infrastructure/infrastructure-setup-bicep/40-basic-agent-setup/main.bicep" -o tsv 2>/dev/null | head -200
-```
-Record: does `40-basic-agent-setup` set `aiServicesConnections` on the project capability host? If **no**, omit it (single-account, model on the same account). If **yes**, record the connection name to reference. Mark the result `[verify]` in `foundry.bicep`. Used in `foundry.bicep`.
-
-### Task 0.3: Confirm the agent-author RBAC role (provisioning identity)
-
-> Data-plane agent **create/update** needs an authoring role — broader than the runtime inference role. Candidates: **Azure AI Developer** (`64702f94-c441-49e6-a78b-ef80e0188fee`, confirmed present) and the newer **"Foundry Project Manager"** (verify name + GUID). Phase 0 confirmed **"Azure AI User"** is *absent* in this tenant.
-
-- [ ] **Step 1:** List built-in roles whose name matches Foundry/AI authoring and record GUIDs.
-
-Run:
-```bash
-az role definition list --query "[?contains(roleName,'Azure AI') || contains(roleName,'Foundry')].{name:roleName,id:name}" -o table
-```
-Record the **narrowest** role that grants agent authoring. Plan defaults to **Azure AI Developer**; if "Foundry Project Manager" exists and is narrower, prefer it. Used in `roles.bicep`.
-
-### Task 0.4: Confirm the data-plane agent SDK surface + endpoint audience
-
-- [ ] **Step 1:** Confirm the SDK package names, the `PersistentAgentsClient` method names (`list_agents` / `create_agent` / `update_agent`), and the token audience the script's managed identity must request.
-
-Run (read-only, against installed docs or a scratch venv):
-```bash
-pip download azure-ai-agents azure-ai-projects --no-deps -d /tmp/agentpkgs 2>&1 | tail -5
-```
-Record: package versions, exact upsert method signatures, and the credential scope (plan assumes `https://ai.azure.com/.default` via `ManagedIdentityCredential`). Used in `infra/scripts/upsert-agent.py`.
-
-- [ ] **Step 2: Record findings & commit the notes**
-
-```bash
-git add docs/superpowers/plans/notes/infra-phase0-findings.md
-git commit -m "spike: confirm capability-host, agent-author RBAC, and agent SDK schema for server-side migration"
-```
+- [ ] **Commit:** `git add docs/superpowers/plans/notes/infra-phase0-findings.md && git commit -m "spike: confirm capability-host, agent-author RBAC, and server-side agent SDK schema"`
 
 ---
 
-## Phase 1 — Reconcile decisions + app config plumbing (offline, no deploy)
+## Phase 1 — Offline: config + doc reconciliation
 
-> This phase is pure docs + .NET config. It makes the repo internally consistent and gives the app a place to receive the agent id. No Azure calls.
+### Task 1.1: Add `AgentId` to `AgentOptions` (TDD) — ✅ DONE
 
-### Task 1.1: Add `AgentId` to `AgentOptions` (TDD)
-
-**Files:**
-- Modify: `src/Agent/AgentOptions.cs`
-- Test: `src/Agent.Tests/AgentOptionsTests.cs`
-
-- [ ] **Step 1: Write the failing test** — add to `AgentOptionsTests.cs`:
-
-```csharp
-[Fact]
-public void Binds_AgentId_From_Configuration()
-{
-    var config = new ConfigurationBuilder()
-        .AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            ["Settings:Agent:ProjectEndpoint"] = "https://x.services.ai.azure.com/api/projects/p",
-            ["Settings:Agent:ModelDeploymentName"] = "chat",
-            ["Settings:Agent:AgentName"] = "Gislefoss",
-            ["Settings:Agent:AgentId"] = "asst_abc123",
-        })
-        .Build();
-
-    var options = config.GetSection(AgentOptions.SectionName).Get<AgentOptions>();
-
-    Assert.NotNull(options);
-    Assert.Equal("asst_abc123", options!.AgentId);
-}
-```
-
-- [ ] **Step 2: Run it to confirm it fails**
-
-Run: `dotnet test src/Gislefoss.slnx --filter "FullyQualifiedName~Binds_AgentId_From_Configuration"`
-Expected: FAIL — `AgentOptions` has no `AgentId` member (compile error).
-
-- [ ] **Step 3: Add the property** — in `src/Agent/AgentOptions.cs`, alongside the existing members:
-
-```csharp
-/// <summary>
-/// Server-generated id of the persistent Foundry agent the app drives at runtime.
-/// Provisioned by infra/modules/agent.bicep and injected as Settings__Agent__AgentId.
-/// Empty until the agent has been deployed.
-/// </summary>
-public string AgentId { get; set; } = string.Empty;
-```
-
-- [ ] **Step 4: Run it to confirm it passes**
-
-Run: `dotnet test src/Gislefoss.slnx --filter "FullyQualifiedName~Binds_AgentId_From_Configuration"`
-Expected: PASS.
-
-- [ ] **Step 5: Full build + test gate**
-
-Run: `dotnet build src/Gislefoss.slnx` then `dotnet test src/Gislefoss.slnx`
-Expected: build green, all tests pass.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add src/Agent/AgentOptions.cs src/Agent.Tests/AgentOptionsTests.cs
-git commit -m "feat(agent): add AgentId option for the server-side persistent agent"
-```
+Implemented (`c59f849`, `a8b41e3`): `AgentOptions.AgentId` + `Binds_AgentId_From_Configuration` test, green. No action remaining.
 
 ### Task 1.2: Reconcile the recorded decisions
 
-**Files:**
-- Modify: `CLAUDE.md`, `docs/superpowers/plans/2026-06-04-meteorologist-agent-infra.md`, `docs/superpowers/plans/2026-06-04-meteorologist-agent-app.md`, `docs/superpowers/plans/notes/infra-phase0-findings.md`
+**Files:** `CLAUDE.md`, both `2026-06-04-*` plans, `notes/infra-phase0-findings.md`, and the `.claude` memory file.
 
-- [ ] **Step 1:** In `CLAUDE.md`, replace the "Foundry **Responses path** (`AIProjectClient.AsAIAgent(...)`, persona passed in-process) … server-side provisioning port … slated for removal" sentences with: the project now uses a **server-side persistent Foundry agent**, persona in git pushed to the agent on each deploy by `infra/modules/agent.bicep` (`deploymentScripts` upsert), the app drives the agent by id (`Settings:Agent:AgentId`) via `PersistentAgentsClient`. Link this plan.
+- [ ] **Step 1 — CLAUDE.md "Current state":** Replace the stale "The agent runtime is not wired yet — there is no Agent Framework call (`AsAIAgent`) …" sentence and the "**Responses path** … server-side provisioning port … slated for removal" sentence. New prose: the Responses-path agent **is** implemented (`MeteorologistAgentFactory` via `AsAIAgent`, `FoundryAgentRunner`, DI, Web wiring, tests green) and the project is **migrating to a server-side persistent Foundry agent** (persona in git pushed to the agent on each deploy by `infra/modules/agent.bicep`; the app retrieves it by id via `Settings:Agent:AgentId`). Link this plan.
 
-- [ ] **Step 2:** In `2026-06-04-meteorologist-agent-infra.md`, add a dated revision note at the top: "**Superseded for the agent surface (2026-06-07):** migrated to a server-side persistent agent — see `2026-06-07-meteorologist-agent-foundry-server-side-migration.md`. The account/observability/app/roles core in this plan still applies; the agent runtime no longer uses the Responses path."
+- [ ] **Step 2 — infra plan revision note:** Add at the top of `2026-06-04-meteorologist-agent-infra.md`: "**Superseded for the agent surface (2026-06-07):** migrated to a server-side persistent agent — see `2026-06-07-meteorologist-agent-foundry-server-side-migration.md`. The account/observability/app/roles core still applies; the agent runtime no longer uses the Responses path."
 
-- [ ] **Step 3:** In `2026-06-04-meteorologist-agent-app.md`, change the agent-wiring target from `AsAIAgent(...)` to `PersistentAgentsClient.GetAgent(AgentId)` + create-thread / add-message / create-and-poll-run. Note `PersonaPath` is no longer read at runtime (persona is server-side); the file remains the git source pushed by Bicep.
+- [ ] **Step 3 — app plan:** In `2026-06-04-meteorologist-agent-app.md`, change the agent-wiring target from `AsAIAgent(...)` to `PersistentAgentsClient.GetAIAgentAsync(AgentId)`; note the persona is no longer read at runtime (it lives server-side; the file remains the git source Bicep embeds).
 
-- [ ] **Step 4:** In `infra-phase0-findings.md`, append a note under Task 0.4 that RBAC now **splits**: runtime (app identity) keeps the inference role; provisioning (UAMI) gains the agent-author role (Phase 0.3 here).
+- [ ] **Step 4 — Phase-0 notes:** In `infra-phase0-findings.md`, append under Task 0.4 that RBAC now **splits**: runtime (app identity) keeps the inference role; provisioning (UAMI) gains the agent-author role.
 
-- [ ] **Step 5: Update the memory file** — overwrite `C:\Users\mchuidnov\.claude\projects\C--repos-test-Gislefoss\memory\agent-uses-responses-path.md` so its body describes the server-side persistent agent (persona in git, pushed via `deploymentScripts` upsert on each deploy, app drives by id). Rename the slug if convenient and update `MEMORY.md`'s pointer line. *(This is a memory maintenance step — the prior memory is now wrong and must not be left to mislead future sessions.)*
+- [ ] **Step 5 — memory (controller-handled, not a repo file):** Overwrite `C:\Users\mchuidnov\.claude\projects\C--repos-test-Gislefoss\memory\agent-uses-responses-path.md` to describe the server-side path **only once the code migration (Phase 2) lands** — until then the current memory accurately reflects `main`. Update `MEMORY.md`'s pointer. *(Do not assert the server-side path as current reality before Phase 2 is merged.)*
 
-- [ ] **Step 6: Commit**
-
-```bash
-git add CLAUDE.md docs/superpowers/plans/
-git commit -m "docs: reconcile repo to the server-side persistent-agent decision"
-```
+- [ ] **Step 6 — Commit (repo docs only):** `git add CLAUDE.md docs/ && git commit -m "docs: reconcile repo to the server-side persistent-agent migration"`
 
 ---
 
-## Phase 2 — Capability host (Basic) in `foundry.bicep`
+## Phase 2 — Offline: migrate the app code to the server-side agent
 
-### Task 2.1: Add account + project capability hosts
+> All offline (.NET, no Azure contact in unit tests). The `AIAgent` abstraction is preserved, so `IFoundryAgentRunner`, `MeteorologistConversation`, `RunOutcomeInspector`, `RunResult`, `IMeteorologistConversation`, and `FakeFoundryAgentRunner` are **unchanged**.
 
-**Files:**
-- Modify: `infra/modules/foundry.bicep`
+### Task 2.1: Add the persistent-agents package
 
-- [ ] **Step 1: Add the two capability-host resources** after the existing `project` resource. `aiServicesConnections` is `[verify]` per Task 0.2 — include only if `40-basic-agent-setup` requires it for a single-account model.
+**Files:** `src/Agent/Agent.csproj`
+
+- [ ] **Step 1:** Determine whether `PersistentAgentsClient` resolves transitively via the already-referenced `Microsoft.Agents.AI.Foundry` (1.9.0-preview.260603.1). Try building Task 2.2 first; if the type is missing, add to the `ItemGroup`:
+
+```xml
+<PackageReference Include="Azure.AI.Agents.Persistent" Version="1.2.0-beta.5" />
+```
+`[verify Task 0.4]` exact version aligned with `Azure.AI.Projects` 2.1.0-beta.3 — pick via `dotnet add src/Agent/Agent.csproj package Azure.AI.Agents.Persistent --prerelease` and pin the resolved version. If transitive, skip this reference.
+
+- [ ] **Step 2:** `dotnet restore src/Gislefoss.slnx` → restores clean.
+- [ ] **Step 3: Commit** `git add src/Agent/Agent.csproj && git commit -m "build(agent): reference Azure.AI.Agents.Persistent for server-side agents"`
+
+### Task 2.2: Rewrite `MeteorologistAgentFactory` to retrieve the server-side agent (TDD)
+
+**Files:** Modify `src/Agent/Foundry/MeteorologistAgentFactory.cs`; Test `src/Agent.Tests/MeteorologistAgentFactoryTests.cs`
+
+- [ ] **Step 1: Replace the factory tests.** The persona is no longer read at runtime, so the three `ReadPersona_*` tests are obsolete. Replace the whole file body with a pure guard test (no Azure contact):
+
+```csharp
+using Agent;
+using Agent.Foundry;
+using Microsoft.Extensions.Options;
+using Xunit;
+
+public class MeteorologistAgentFactoryTests
+{
+    private static MeteorologistAgentFactory Factory(string agentId)
+        => new(Options.Create(new AgentOptions
+        {
+            ProjectEndpoint = "https://x.services.ai.azure.com/api/projects/p",
+            ModelDeploymentName = "gpt-4o",
+            AgentId = agentId,
+        }));
+
+    [Fact]
+    public async Task CreateAsync_Throws_When_AgentId_Missing()
+        => await Assert.ThrowsAsync<InvalidOperationException>(() => Factory("").CreateAsync());
+}
+```
+
+- [ ] **Step 2: Run it — fails to compile** (`CreateAsync` does not exist yet). `dotnet test src/Gislefoss.slnx --filter "FullyQualifiedName~MeteorologistAgentFactoryTests"` → FAIL.
+
+- [ ] **Step 3: Rewrite the factory:**
+
+```csharp
+using Azure.AI.Agents.Persistent;   // PersistentAgentsClient + GetAIAgentAsync extension [verify Task 0.4]
+using Azure.AI.Projects;
+using Azure.Identity;
+using Microsoft.Agents.AI;
+using Microsoft.Extensions.Options;
+
+namespace Agent.Foundry;
+
+public sealed class MeteorologistAgentFactory(IOptions<AgentOptions> options)
+{
+    private readonly AgentOptions _o = options.Value;
+
+    /// <summary>
+    /// Retrieves the server-side persistent agent by id and wraps it as an <see cref="AIAgent"/>.
+    /// The persona/instructions live server-side (provisioned by infra/modules/agent.bicep on each
+    /// deploy); this no longer reads any local persona file.
+    /// </summary>
+    public async Task<AIAgent> CreateAsync(CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(_o.AgentId))
+            throw new InvalidOperationException("Settings:Agent:AgentId is not configured.");
+
+        var project = new AIProjectClient(new Uri(_o.ProjectEndpoint), new DefaultAzureCredential());
+        var agents = project.GetPersistentAgentsClient();           // [verify Task 0.4] else: new PersistentAgentsClient(new Uri(_o.ProjectEndpoint), new DefaultAzureCredential())
+        return await agents.GetAIAgentAsync(_o.AgentId, cancellationToken: ct);
+    }
+}
+```
+
+> Tracing: `GetAIAgentAsync` exposes no `clientFactory` hook, so the prior `.UseOpenTelemetry()` decoration is dropped here — GenAI traces come from Foundry-side tracing via the App Insights→project connection (Phase 6). `[verify]`
+
+- [ ] **Step 4: Run the guard test** → PASS (it throws before any Azure call). `dotnet test … --filter "FullyQualifiedName~MeteorologistAgentFactoryTests"` → PASS.
+
+- [ ] **Step 5: Commit** `git add src/Agent/Foundry/MeteorologistAgentFactory.cs src/Agent.Tests/MeteorologistAgentFactoryTests.cs && git commit -m "feat(agent): retrieve the server-side persistent agent by id"`
+
+### Task 2.3: Make `FoundryAgentRunner` take an async agent factory
+
+**Files:** Modify `src/Agent/Foundry/FoundryAgentRunner.cs`
+
+- [ ] **Step 1:** Change the constructor delegate from `Func<AIAgent>` to `Func<Task<AIAgent>>` and `await` it. The `CreateSessionAsync`/`RunAsync` calls and the `ClientResultException` mapping are **unchanged**:
+
+```csharp
+public sealed class FoundryAgentRunner(Func<Task<AIAgent>> agentFactory) : IFoundryAgentRunner
+{
+    public async Task<object> StartThreadAsync(CancellationToken ct)
+        => await (await agentFactory()).CreateSessionAsync(ct);
+
+    public async Task<RunResult> SendAsync(object thread, string userText, CancellationToken ct)
+    {
+        try
+        {
+            var agent = await agentFactory();
+            var response = await agent.RunAsync(userText, (AgentSession)thread);
+            return new RunResult(RunState.Completed, response.Text, GuardrailMetadata: null, ErrorCode: null);
+        }
+        catch (ClientResultException ex) when (ex.Status == 400 && IsContentFilter(ex))
+        {
+            return new RunResult(RunState.Blocked, null, GuardrailMetadata: "content_filter", ErrorCode: "content_filter");
+        }
+        catch (ClientResultException ex)
+        {
+            return new RunResult(RunState.Failed, null, null, ErrorCode: ex.Status.ToString());
+        }
+    }
+
+    static bool IsContentFilter(ClientResultException ex)
+    {
+        var body = ex.GetRawResponse()?.Content;
+        if (body is null) return false;
+        using var doc = System.Text.Json.JsonDocument.Parse(body);
+        return doc.RootElement.TryGetProperty("error", out var err)
+            && err.TryGetProperty("code", out var code)
+            && code.GetString() == "content_filter";
+    }
+}
+```
+(Keep the existing `using` directives: `System.ClientModel`, `System.Text.Json`, `Agent.Running`, `Microsoft.Agents.AI`.)
+
+- [ ] **Step 2: Build** `dotnet build src/Gislefoss.slnx` → expect errors in `ServiceCollectionExtensions` and `FoundryEndToEndTests` (callers still pass `Func<AIAgent>`). That is expected; Tasks 2.4–2.6 fix them.
+
+- [ ] **Step 3: Commit** (after Task 2.4 compiles — runner + DI land together). Defer commit to Task 2.4 Step 4.
+
+### Task 2.4: Update DI to a memoized async agent provider
+
+**Files:** Modify `src/Agent/ServiceCollectionExtensions.cs`; Test `src/Agent.Tests/ServiceRegistrationTests.cs`
+
+- [ ] **Step 1: Rewrite `AddMeteorologistAgent`.** Replace the eager `AddSingleton<AIAgent>(… Create())` with a memoized `Lazy<Task<AIAgent>>` so the agent is fetched once, on first message, not at boot (preserves UI prerender without Foundry configured):
+
+```csharp
+using Agent.Foundry;
+using Agent.Running;
+using Microsoft.Agents.AI;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace Agent;
+
+public static class ServiceCollectionExtensions
+{
+    public static IServiceCollection AddMeteorologistAgent(this IServiceCollection services, IConfiguration config)
+    {
+        services.Configure<AgentOptions>(config.GetSection(AgentOptions.SectionName));
+
+        services.AddSingleton<MeteorologistAgentFactory>();
+        // Memoize the async retrieval: the server-side agent is fetched once, lazily, on first use.
+        services.AddSingleton(sp => new Lazy<Task<AIAgent>>(
+            () => sp.GetRequiredService<MeteorologistAgentFactory>().CreateAsync()));
+        services.AddSingleton<IFoundryAgentRunner>(sp =>
+            new FoundryAgentRunner(() => sp.GetRequiredService<Lazy<Task<AIAgent>>>().Value));
+        services.AddSingleton<RunOutcomeInspector>();
+        services.AddScoped<IMeteorologistConversation, MeteorologistConversation>();
+        return services;
+    }
+}
+```
+
+- [ ] **Step 2: Update `ServiceRegistrationTests`.** The directly-registered service is now `Lazy<Task<AIAgent>>`, not `AIAgent`. Change that assertion line and drop the obsolete `PersonaPath` config key:
+
+```csharp
+// in the in-memory config dictionary, remove the PersonaPath line (optional) and keep ProjectEndpoint + ModelDeploymentName.
+// change:
+Assert.Contains(services, d => d.ServiceType == typeof(AIAgent));
+// to:
+Assert.Contains(services, d => d.ServiceType == typeof(Lazy<Task<AIAgent>>));
+```
+Keep the other three `Assert.Contains` (factory, runner, conversation) and the options assertion.
+
+- [ ] **Step 3: Build + test** `dotnet build src/Gislefoss.slnx` (runner + DI now compile together) then `dotnet test src/Gislefoss.slnx --filter "FullyQualifiedName~ServiceRegistrationTests"` → PASS. (FoundryEndToEndTests still won't compile — fixed in Task 2.6.)
+
+- [ ] **Step 4: Commit** `git add src/Agent/Foundry/FoundryAgentRunner.cs src/Agent/ServiceCollectionExtensions.cs src/Agent.Tests/ServiceRegistrationTests.cs && git commit -m "refactor(agent): async memoized agent provider for server-side retrieval"`
+
+### Task 2.5: Drop the eager persona read at boot
+
+**Files:** Modify `src/Web/Program.cs`
+
+- [ ] **Step 1:** Remove the boot-time persona validation (the persona is no longer the app's runtime concern). Replace lines 63–64:
+
+```csharp
+            var app = builder.Build();
+
+            // Fail fast at boot if the persona is missing/empty (does not contact Azure).
+            app.Services.GetRequiredService<Agent.Foundry.MeteorologistAgentFactory>().ReadPersona();
+```
+with:
+
+```csharp
+            var app = builder.Build();
+
+            // The persona now lives server-side on the persistent agent (provisioned by Bicep); the
+            // app retrieves the agent lazily by id (Settings:Agent:AgentId) on the first chat turn.
+            // No boot-time Foundry contact — the UI prerenders without an agent configured.
+```
+
+- [ ] **Step 2: Build** `dotnet build src/Gislefoss.slnx` → green (no remaining `ReadPersona` references in app code).
+
+- [ ] **Step 3: Commit** `git add src/Web/Program.cs && git commit -m "refactor(web): drop boot-time persona read; agent retrieved lazily by id"`
+
+### Task 2.6: Update the live end-to-end smoke test
+
+**Files:** Modify `src/Agent.Tests/Integration/FoundryEndToEndTests.cs`
+
+- [ ] **Step 1:** Drive by `AgentId` and the async factory. Add a `FOUNDRY_AGENT_ID` env var; remove the persona-file note. Replace `BuildConversation`:
+
+```csharp
+    private static string? AgentId => Environment.GetEnvironmentVariable("FOUNDRY_AGENT_ID");
+
+    private static MeteorologistConversation BuildConversation()
+    {
+        var options = Options.Create(new AgentOptions
+        {
+            ProjectEndpoint = Endpoint!,
+            ModelDeploymentName = Model,
+            AgentName = "Gislefoss-it",
+            AgentId = AgentId!,
+        });
+        var factory = new MeteorologistAgentFactory(options);
+        // FoundryAgentRunner takes Func<Task<AIAgent>> now (server-side retrieval is async).
+        return new MeteorologistConversation(new FoundryAgentRunner(() => factory.CreateAsync()), new RunOutcomeInspector());
+    }
+```
+Update each `Skip.If` to also skip when `AgentId` is empty: `Skip.If(string.IsNullOrEmpty(Endpoint) || string.IsNullOrEmpty(AgentId), "No FOUNDRY_PROJECT_ENDPOINT/FOUNDRY_AGENT_ID set.");`. Update the file header comment (drop the persona-file paragraph; note `FOUNDRY_AGENT_ID` is now required for a live run).
+
+- [ ] **Step 2: Full build + test gate** `dotnet build src/Gislefoss.slnx` then `dotnet test src/Gislefoss.slnx` → build green; all unit tests pass; the two `FoundryEndToEndTests` skip (no env). Expect the same green count as before, minus the removed `ReadPersona` tests, plus the new guard test.
+
+- [ ] **Step 3: Commit** `git add src/Agent.Tests/Integration/FoundryEndToEndTests.cs && git commit -m "test(agent): drive the live smoke test by server-side AgentId"`
+
+---
+
+## Phase 3 — Capability host (Basic) in `foundry.bicep` *(deploy-gated)*
+
+### Task 3.1: Add account + project capability hosts
+
+**Files:** Modify `infra/modules/foundry.bicep`
+
+- [ ] **Step 1:** After the existing `project` resource, add:
 
 ```bicep
 // --- Agent Service enablement (Basic setup: Foundry-onboard storage) ---
-// Account-level capability host. capabilityHostKind 'Agents' turns on the Agent Service.
 resource accountCapHost 'Microsoft.CognitiveServices/accounts/capabilityHosts@2025-04-01-preview' = {
   parent: foundry
   name: '${foundryName}-caphost'
-  properties: {
-    capabilityHostKind: 'Agents'
-  }
+  properties: { capabilityHostKind: 'Agents' }
   dependsOn: [ project ]
 }
 
-// Project-level capability host. BASIC: omit storageConnections / threadStorageConnections /
-// vectorStoreConnections so Microsoft-managed (onboard) storage is used.
-// [verify Task 0.2] aiServicesConnections is only needed in the BYO-AOAI variant; for a model
-// deployed on THIS account it is expected to be unnecessary. If 'what-if' rejects an empty
-// properties bag, set aiServicesConnections to the in-account deployment connection name.
+// BASIC: omit storageConnections / threadStorageConnections / vectorStoreConnections → onboard storage.
+// [verify Task 0.2] aiServicesConnections is only needed in the BYO-AOAI variant; for a model on THIS
+// account it is expected unnecessary. If 'what-if' rejects an empty properties bag, set it to the
+// in-account deployment connection name.
 resource projectCapHost 'Microsoft.CognitiveServices/accounts/projects/capabilityHosts@2025-04-01-preview' = {
   parent: project
   name: '${project.name}-caphost'
-  properties: {
-    capabilityHostKind: 'Agents'
-  }
+  properties: { capabilityHostKind: 'Agents' }
   dependsOn: [ accountCapHost ]
 }
-```
 
-- [ ] **Step 2: Add an output** so downstream modules can order on the host being ready:
-
-```bicep
 output projectCapHostId string = projectCapHost.id
 ```
 
-- [ ] **Step 3: Compile (offline gate)**
-
-Run: `az bicep build --file infra/main.bicep`
-Expected: no errors.
-
-- [ ] **Step 4: Preview + deploy (deploy-gated)**
-
-Run: `az deployment group what-if -g <rg> -f infra/main.bicep -p infra/main.bicepparam`
-Expected: shows the two capability hosts to create; if it rejects the empty project `properties`, apply the `[verify]` fallback (add `aiServicesConnections`) and re-run.
-Run: `az deployment group create -g <rg> -f infra/main.bicep -p infra/main.bicepparam`
-Expected: succeeds.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add infra/modules/foundry.bicep
-git commit -m "infra(foundry): enable Agent Service via Basic capability hosts (onboard storage)"
-```
+- [ ] **Step 2:** `az bicep build --file infra/main.bicep` → no errors (offline gate).
+- [ ] **Step 3 (deploy-gated):** `what-if` shows two capability hosts; if it rejects the empty project `properties`, apply the `[verify]` fallback. `create` → succeeds.
+- [ ] **Step 4: Commit** `git add infra/modules/foundry.bicep && git commit -m "infra(foundry): enable Agent Service via Basic capability hosts (onboard storage)"`
 
 ---
 
-## Phase 3 — Provisioning identity (UAMI) + split RBAC
+## Phase 4 — Provisioning identity (UAMI) + split RBAC *(deploy-gated)*
 
-### Task 3.1: `identity.bicep` — user-assigned identity for the script
+### Task 4.1: `identity.bicep`
 
-**Files:**
-- Create: `infra/modules/identity.bicep`
-- Modify: `infra/main.bicep`
+**Files:** Create `infra/modules/identity.bicep`; Modify `infra/main.bicep`
 
-- [ ] **Step 1: Write the module**
-
+- [ ] **Step 1:**
 ```bicep
-// infra/modules/identity.bicep
-// User-assigned identity the deploymentScripts agent-upsert runs as. It is granted agent-author
-// rights on Foundry in roles.bicep; the script authenticates as this identity.
+// infra/modules/identity.bicep — UAMI the deploymentScripts agent-upsert runs as.
 param namePrefix string
 param location string
 param tags object
@@ -299,46 +407,24 @@ output id string = uami.id
 output principalId string = uami.properties.principalId
 output clientId string = uami.properties.clientId
 ```
-
-- [ ] **Step 2: Compose in `main.bicep`** (before `roles` and `agent`):
-
+- [ ] **Step 2:** Compose in `main.bicep` (before `roles`/`agent`):
 ```bicep
 module identity 'modules/identity.bicep' = {
   name: 'identity'
   params: { namePrefix: namePrefix, location: location, tags: tags }
 }
 ```
+- [ ] **Step 3:** `az bicep build` → no errors. **Step 4: Commit** `git add infra/modules/identity.bicep infra/main.bicep && git commit -m "infra(identity): user-assigned identity for agent provisioning"`
 
-- [ ] **Step 3: Compile (offline gate)**
+### Task 4.2: Split RBAC in `roles.bicep`
 
-Run: `az bicep build --file infra/main.bicep`
-Expected: no errors.
+**Files:** Modify `infra/modules/roles.bicep`, `infra/main.bicep`
 
-- [ ] **Step 4: Commit**
-
-```bash
-git add infra/modules/identity.bicep infra/main.bicep
-git commit -m "infra(identity): user-assigned identity for agent provisioning"
-```
-
-### Task 3.2: Split RBAC in `roles.bicep`
-
-> The app's runtime identity keeps the **inference** role (run threads/runs). The UAMI gains the **agent-author** role (create/update the agent). Two distinct assignments.
-
-**Files:**
-- Modify: `infra/modules/roles.bicep`
-- Modify: `infra/main.bicep`
-
-- [ ] **Step 1: Add the provisioning role assignment** to `roles.bicep`. Keep the existing `cognitiveServicesUser` assignment for the app; add a second param + assignment for the UAMI.
-
+- [ ] **Step 1:** Add a provisioning assignment (keep the existing `cognitiveServicesUser` app assignment):
 ```bicep
-// add params:
 param provisionerPrincipalId string
+var azureAiDeveloper = '64702f94-c441-49e6-a78b-ef80e0188fee'   // [verify Task 0.3]
 
-// add role var ([verify Task 0.3]: Azure AI Developer; prefer "Foundry Project Manager" if narrower):
-var azureAiDeveloper = '64702f94-c441-49e6-a78b-ef80e0188fee'
-
-// add assignment: the provisioning UAMI authors the persistent agent.
 resource provisionerRa 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: foundry
   name: guid(foundry.id, provisionerPrincipalId, azureAiDeveloper)
@@ -349,108 +435,53 @@ resource provisionerRa 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 ```
-
-- [ ] **Step 2: Pass the UAMI principal in `main.bicep`**:
-
-```bicep
-module roles 'modules/roles.bicep' = {
-  name: 'roles'
-  params: {
-    foundryName: foundry.outputs.foundryName
-    principalId: app.outputs.principalId
-    provisionerPrincipalId: identity.outputs.principalId
-  }
-}
-```
-
-- [ ] **Step 3: Compile (offline gate)**
-
-Run: `az bicep build --file infra/main.bicep`
-Expected: no errors.
-
-- [ ] **Step 4: Preview + deploy (deploy-gated)**
-
-Run: `az deployment group what-if -g <rg> -f infra/main.bicep -p infra/main.bicepparam`
-Expected: shows two role assignments (app→Cognitive Services User, UAMI→Azure AI Developer).
-Run: `az deployment group create ...` → succeeds.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add infra/modules/roles.bicep infra/main.bicep
-git commit -m "infra(roles): split RBAC — app runs inference, UAMI authors the agent"
-```
+- [ ] **Step 2:** Pass `provisionerPrincipalId: identity.outputs.principalId` from `main.bicep`.
+- [ ] **Step 3:** `az bicep build` → no errors. (deploy-gated) `what-if` shows two role assignments; `create`.
+- [ ] **Step 4: Commit** `git add infra/modules/roles.bicep infra/main.bicep && git commit -m "infra(roles): split RBAC — app runs inference, UAMI authors the agent"`
 
 ---
 
-## Phase 4 — `deploymentScripts` agent upsert
+## Phase 5 — `deploymentScripts` agent upsert *(deploy-gated)*
 
-### Task 4.1: The upsert script
+### Task 5.1: `infra/scripts/upsert-agent.py`
 
-**Files:**
-- Create: `infra/scripts/upsert-agent.py`
+**Files:** Create `infra/scripts/upsert-agent.py`
 
-- [ ] **Step 1: Write the script.** Idempotent **upsert-by-name**: list agents, match `AGENT_NAME`, update if found else create; write the agent id to the deployment-script outputs file. `[verify Task 0.4]` SDK method names / credential scope against the installed package.
-
+- [ ] **Step 1:** Idempotent **upsert-by-name** to keep the agent id **stable** across deploys (preferred over relying on same-name version bumps). `[verify Task 0.4]` SDK names.
 ```python
-# infra/scripts/upsert-agent.py
-# Upsert the persistent Foundry agent by NAME (stable across deploys) and emit its id.
-# Runs inside the deploymentScripts container as the user-assigned managed identity.
-import json
-import os
-import sys
-import time
-
+# infra/scripts/upsert-agent.py — upsert the persistent agent by NAME; emit its id.
+import json, os, sys, time
 from azure.identity import ManagedIdentityCredential
-from azure.ai.agents import AgentsClient  # [verify Task 0.4] package/class name
+from azure.ai.agents import AgentsClient   # [verify Task 0.4]
 
-ENDPOINT = os.environ["PROJECT_ENDPOINT"]
-MODEL = os.environ["MODEL_DEPLOYMENT_NAME"]
-NAME = os.environ["AGENT_NAME"]
-INSTRUCTIONS = os.environ["AGENT_INSTRUCTIONS"]
+ENDPOINT = os.environ["PROJECT_ENDPOINT"]; MODEL = os.environ["MODEL_DEPLOYMENT_NAME"]
+NAME = os.environ["AGENT_NAME"]; INSTRUCTIONS = os.environ["AGENT_INSTRUCTIONS"]
 CLIENT_ID = os.environ["UAMI_CLIENT_ID"]
 
-cred = ManagedIdentityCredential(client_id=CLIENT_ID)
-client = AgentsClient(endpoint=ENDPOINT, credential=cred)
-
-# Role-propagation retry: a freshly-assigned UAMI role can 403 for a minute or two.
-last_err = None
-for attempt in range(12):  # ~6 min max
+client = AgentsClient(endpoint=ENDPOINT, credential=ManagedIdentityCredential(client_id=CLIENT_ID))
+last = None
+for attempt in range(12):  # ~6 min: tolerate role-propagation 403s
     try:
         existing = next((a for a in client.list_agents() if a.name == NAME), None)
-        if existing is not None:
-            agent = client.update_agent(existing.id, model=MODEL, name=NAME, instructions=INSTRUCTIONS)
-        else:
-            agent = client.create_agent(model=MODEL, name=NAME, instructions=INSTRUCTIONS)
+        agent = (client.update_agent(existing.id, model=MODEL, name=NAME, instructions=INSTRUCTIONS)
+                 if existing else client.create_agent(model=MODEL, name=NAME, instructions=INSTRUCTIONS))
         break
-    except Exception as e:  # noqa: BLE001 — propagation/4xx during warm-up
-        last_err = e
-        sys.stderr.write(f"attempt {attempt}: {e}\n")
-        time.sleep(30)
+    except Exception as e:
+        last = e; sys.stderr.write(f"attempt {attempt}: {e}\n"); time.sleep(30)
 else:
-    raise SystemExit(f"agent upsert failed after retries: {last_err}")
+    raise SystemExit(f"agent upsert failed after retries: {last}")
 
-# deploymentScripts reads this file for `properties.outputs`.
 with open(os.environ["AZ_SCRIPTS_OUTPUT_PATH"], "w") as f:
     json.dump({"agentId": agent.id}, f)
 print(f"agent upserted: {agent.id}")
 ```
+- [ ] **Step 2: Commit** `git add infra/scripts/upsert-agent.py && git commit -m "infra(agent): data-plane upsert-by-name script for the persistent agent"`
 
-- [ ] **Step 2: Commit**
+### Task 5.2: `agent.bicep` — wrap as a deployment resource
 
-```bash
-git add infra/scripts/upsert-agent.py
-git commit -m "infra(agent): data-plane upsert-by-name script for the persistent agent"
-```
+**Files:** Create `infra/modules/agent.bicep`; Modify `infra/main.bicep`
 
-### Task 4.2: `agent.bicep` — wrap the script as a deployment resource
-
-**Files:**
-- Create: `infra/modules/agent.bicep`
-- Modify: `infra/main.bicep`
-
-- [ ] **Step 1: Write the module.** The persona is passed in as a param (from `loadTextContent` in `main.bicep`). The script body is loaded with `loadTextContent` too, so the `.py` file stays the single source. Force re-run every deploy with a changing `forceUpdateTag`.
-
+- [ ] **Step 1:**
 ```bicep
 // infra/modules/agent.bicep
 param namePrefix string
@@ -463,7 +494,6 @@ param agentName string
 param agentInstructions string
 param uamiId string
 param uamiClientId string
-@description('Forces the script to re-run (re-push persona) on every deployment.')
 param forceUpdateTag string = utcNow()
 
 resource upsert 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
@@ -471,12 +501,7 @@ resource upsert 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
   location: location
   tags: tags
   kind: 'AzureCLI'
-  identity: {
-    type: 'UserAssigned'
-    userAssignedIdentities: {
-      '${uamiId}': {}
-    }
-  }
+  identity: { type: 'UserAssigned', userAssignedIdentities: { '${uamiId}': {} } }
   properties: {
     azCliVersion: '2.62.0'
     forceUpdateTag: forceUpdateTag
@@ -490,7 +515,6 @@ resource upsert 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
       { name: 'AGENT_INSTRUCTIONS', value: agentInstructions }
       { name: 'UAMI_CLIENT_ID', value: uamiClientId }
     ]
-    // The AzureCLI image ships python3 + pip. Install the data-plane SDK, then run the upsert.
     scriptContent: '''
 set -euo pipefail
 pip install --quiet azure-ai-agents azure-identity
@@ -504,14 +528,11 @@ python3 /tmp/upsert-agent.py
 
 output agentId string = upsert.properties.outputs.agentId
 ```
+> If `loadTextContent` does not interpolate inside the `'''` string, declare `var agentScript = loadTextContent('../scripts/upsert-agent.py')` and build `scriptContent` by concatenation. The `az bicep build` gate tells you which compiles. `[verify]`
 
-> **Note on `scriptContent`:** Bicep does not interpolate `loadTextContent` inside a `'''` multiline string. If `az bicep build` does not substitute it, instead declare `var agentScript = loadTextContent('../scripts/upsert-agent.py')` and build `scriptContent` with string concatenation (`'...cat > /tmp/upsert-agent.py <<PYEOF\n' + agentScript + '\nPYEOF\npython3 /tmp/upsert-agent.py'`). The `az bicep build` gate (Step 3) tells you which form compiles. `[verify]`
-
-- [ ] **Step 2: Compose in `main.bicep`.** Embed the persona at compile time and order after the capability host + role assignment.
-
+- [ ] **Step 2:** Compose in `main.bicep`, embedding the persona at compile time:
 ```bicep
-// Persona: embedded from the git source at compile time → re-pushed every deploy.
-// [verify] confirm this relative path resolves from infra/ (repo-root/src/Web/personas/gislefoss.md).
+// [verify] confirm this relative path resolves from infra/ → repo-root/src/Web/personas/gislefoss.md
 var personaText = loadTextContent('../src/Web/personas/gislefoss.md')
 
 module agent 'modules/agent.bicep' = {
@@ -527,142 +548,57 @@ module agent 'modules/agent.bicep' = {
     uamiId: identity.outputs.id
     uamiClientId: identity.outputs.clientId
   }
-  dependsOn: [
-    roles   // role assignment must exist (and propagate) before the script authenticates
-    foundry // capability host must be enabled before agents can be created
-  ]
+  dependsOn: [ roles, foundry ]   // role must propagate + capability host must be enabled first
 }
 
 output agentId string = agent.outputs.agentId
 ```
-
-- [ ] **Step 3: Compile (offline gate)**
-
-Run: `az bicep build --file infra/main.bicep`
-Expected: no errors. If `loadTextContent` does not interpolate inside `scriptContent`, apply the concatenation fallback from Step 1's note and re-run.
-
-- [ ] **Step 4: Preview + deploy (deploy-gated)**
-
-Run: `az deployment group what-if -g <rg> -f infra/main.bicep -p infra/main.bicepparam`
-Expected: shows the UAMI, the deployment script, and (transitively) its ACI + storage to create.
-Run: `az deployment group create -g <rg> -f infra/main.bicep -p infra/main.bicepparam`
-Expected: succeeds; the script logs `agent upserted: asst_...`. If it 403s, confirm the UAMI role propagated (the in-script retry covers most lag) and re-run.
-
-- [ ] **Step 5: Verify the agent exists server-side**
-
-Run: `az deployment group show -g <rg> -n main --query "properties.outputs.agentId.value" -o tsv`
-Expected: a non-empty `asst_...` id. Confirm the agent appears in the Foundry portal **Agents** blade with the persona as its instructions.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add infra/modules/agent.bicep infra/main.bicep
-git commit -m "infra(agent): upsert the persistent agent in-deployment, persona from git"
-```
+- [ ] **Step 3:** `az bicep build` → no errors (apply concatenation fallback if needed).
+- [ ] **Step 4 (deploy-gated):** `what-if` shows the script + ACI/storage; `create` logs `agent upserted: asst_...`.
+- [ ] **Step 5:** `az deployment group show -g <rg> -n main --query "properties.outputs.agentId.value" -o tsv` → non-empty `asst_...`; confirm the agent in the portal **Agents** blade with the persona as instructions.
+- [ ] **Step 6: Commit** `git add infra/modules/agent.bicep infra/main.bicep && git commit -m "infra(agent): upsert the persistent agent in-deployment, persona from git"`
 
 ---
 
-## Phase 5 — Inject the agent id into the app
+## Phase 6 — Inject the agent id into the app *(deploy-gated)*
 
-### Task 5.1: `app.bicep` — add `Settings__Agent__AgentId`
+### Task 6.1: `app.bicep` — add `Settings__Agent__AgentId`
 
-**Files:**
-- Modify: `infra/modules/app.bicep`
-- Modify: `infra/main.bicep`
+**Files:** Modify `infra/modules/app.bicep`, `infra/main.bicep`
 
-- [ ] **Step 1: Add the param** to `app.bicep`:
+- [ ] **Step 1:** Add `param agentId string` and the env var (after `AgentName`): `{ name: 'Settings__Agent__AgentId', value: agentId }`.
+- [ ] **Step 2:** Pass `agentId: agent.outputs.agentId` from `main.bicep`.
 
-```bicep
-param agentId string
-```
+> **Cycle check:** `app → roles (principalId)` and `agent → roles`; if `app` also consumed `agent.outputs.agentId` while `agent` depends on `roles` which depends on `app`, that cycles. Break it by splitting `roles` into `roles-app` (consumes `app.principalId`) and `roles-provisioner` (consumes `identity.principalId`), with `agent dependsOn [roles-provisioner]` only. The `az bicep build` gate flags the cycle; prefer the split. `[verify]`
 
-- [ ] **Step 2: Add the env var** in the container `env` array (after `AgentName`):
-
-```bicep
-            { name: 'Settings__Agent__AgentId', value: agentId }
-```
-
-- [ ] **Step 3: Pass it from `main.bicep`.** The `app` module now consumes `agent.outputs.agentId`, which makes `app` depend on `agent` (correct ordering — agent exists before the app references it):
-
-```bicep
-module app 'modules/app.bicep' = {
-  name: 'app'
-  params: {
-    // ...existing params...
-    agentId: agent.outputs.agentId
-  }
-}
-```
-
-> **Ordering note:** `app` previously provided `principalId` to `roles`, and `agent` now `dependsOn: [roles]`. Confirm there is no cycle: `app → roles → agent → app(agentId)` would cycle. Break it by having `agent` depend on **`identity`'s** role assignment only (the UAMI assignment), not the whole `roles` module, OR split `roles` into `roles-app` (consumes `app.principalId`) and `roles-provisioner` (consumes `identity.principalId`) so `agent` depends only on `roles-provisioner`. The `az bicep build` gate flags the cycle; prefer the split. `[verify]`
-
-- [ ] **Step 4: Compile (offline gate)**
-
-Run: `az bicep build --file infra/main.bicep`
-Expected: no errors and **no dependency cycle**. If a cycle is reported, apply the `roles` split above.
-
-- [ ] **Step 5: Preview + deploy (deploy-gated)**
-
-Run: `az deployment group what-if ...` then `create ...`
-Expected: the container app updates with the new env var; revision restarts.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add infra/modules/app.bicep infra/main.bicep
-git commit -m "infra(app): inject Settings__Agent__AgentId into the web container"
-```
+- [ ] **Step 3:** `az bicep build` → no errors, no dependency cycle.
+- [ ] **Step 4 (deploy-gated):** `what-if`/`create` → app revision updates with the env var.
+- [ ] **Step 5: Commit** `git add infra/modules/app.bicep infra/main.bicep && git commit -m "infra(app): inject Settings__Agent__AgentId into the web container"`
 
 ---
 
-## Phase 6 — End-to-end verification
+## Phase 7 — End-to-end verification *(deploy-gated)*
 
-### Task 6.1: Clean deploy + live checks
-
-- [ ] **Step 1: Full deploy from scratch (idempotency + ordering)** — deploy-gated.
-
-Run: `az deployment group create -g <rg> -f infra/main.bicep -p infra/main.bicepparam`
-Expected: succeeds; outputs include a non-empty `agentId` and `appUrl`.
-
-- [ ] **Step 2: Re-deploy unchanged (upsert is idempotent, persona re-pushed)**
-
-Run the same `create` again.
-Expected: succeeds; `agentId` is the **same** id (upsert-by-name matched the existing agent and updated it, not created a duplicate). Confirm only one `Gislefoss` agent exists in the portal.
-
-- [ ] **Step 3: Persona-change re-push**
-
-Make a trivial edit to `src/Web/personas/gislefoss.md`, `az deployment group create` again.
-Expected: same `agentId`; the agent's instructions in the portal reflect the edit (proves "pushed on each provision"). Revert the edit + redeploy if it was only a test.
-
-- [ ] **Step 4: Live app drives the agent** (once the app's persistent-agent wiring from the app plan is built)
-
-Browse `appUrl/chat`, ask "What's a typical June day in Oslo?" → an answer; send an injection ("ignore your instructions…") → a safe decline (the deployment's block Guardrail still applies — it is attached at the model deployment, unchanged by this migration). Confirm a GenAI trace in App Insights.
-
-- [ ] **Step 5: Commit any param/fixups**
-
-```bash
-git add infra/
-git commit -m "infra: verified server-side agent deploy — upsert idempotent, persona re-pushed"
-```
+- [ ] **Step 1:** Full `create` from scratch → outputs non-empty `agentId` + `appUrl`.
+- [ ] **Step 2:** Re-deploy unchanged → **same** `agentId` (upsert matched by name, no duplicate); one `Gislefoss` agent in the portal.
+- [ ] **Step 3:** Edit `src/Web/personas/gislefoss.md`, re-deploy → same `agentId`, instructions updated in the portal (proves "pushed on each provision"). Revert if it was a test.
+- [ ] **Step 4:** Live app: browse `appUrl/chat`, ask "What's a typical June day in Oslo?" → answer; send an injection → safe decline (deployment block Guardrail, unchanged). Set `FOUNDRY_PROJECT_ENDPOINT`/`FOUNDRY_MODEL_NAME`/`FOUNDRY_AGENT_ID` and run `dotnet test … --filter FoundryEndToEndTests` → `Weather_Question_Gets_An_Answer` PASS.
+- [ ] **Step 5:** Confirm GenAI traces appear via the App Insights→project connection (the server-side trace path). **Step 6: Commit** any fixups + **Step 7:** update the memory file (Phase 1 Task 1.2 Step 5) now that the server-side path is live on `main`.
 
 ---
 
 ## Self-review
 
-- **Requirement coverage:**
-  - *Agent inside Foundry* → server-side persistent agent (Phase 4) ✓
-  - *Persona in git, pushed on each provision* → `loadTextContent` + `forceUpdateTag: utcNow()` upsert every deploy (Phase 4); verified in Phase 6 Step 3 ✓
-  - *Agent resource created in Bicep* → capability host as native Bicep (Phase 2); agent definition created **within the Bicep deployment** via `deploymentScripts` (Phase 4), the only mechanism the platform allows since the agent is data-plane ✓
-  - *Basic setup, Foundry onboard storage* → capability hosts omit storage/thread/vector connections (Phase 2) ✓
-  - *Not half a migration* → app config (`AgentId`, Phase 1.1), app-plan wiring target, and all recorded decisions reconciled (Phase 1.2) ✓
-- **Placeholder scan:** the deferred specifics are the `[verify]` items, each tied to a Phase 0 task or the `az bicep build` arbiter with a stated fallback (capability-host `aiServicesConnections`; SDK method names; `loadTextContent`-in-`scriptContent` concatenation fallback; dependency-cycle `roles` split; agent-author role choice) — not open-ended TODOs.
-- **Type/identifier consistency:** `identity.outputs.{id,principalId,clientId}` → `agent`/`roles` params; `agent.outputs.agentId` → `app.agentId` → `Settings__Agent__AgentId` → `AgentOptions.AgentId`; `foundry.outputs.{foundryName,projectEndpoint,deploymentName}` reused unchanged.
-
----
+- **Premise corrected:** the plan now migrates **real merged code** (factory/runner/DI/Web/tests), not a greenfield wiring. ✓
+- **Requirement coverage:** server-side agent (Phase 5) ✓; persona in git pushed every deploy (`loadTextContent` + `forceUpdateTag`, upsert-by-name; verified Phase 7 Step 3) ✓; agent created in Bicep (capability host native + agent via in-deployment `deploymentScripts` — the only mechanism for a data-plane object) ✓; Basic/onboard storage (Phase 3) ✓; app drives by id (Phase 2) ✓.
+- **Abstraction preserved:** `IFoundryAgentRunner`/`MeteorologistConversation`/`RunOutcomeInspector`/`FakeFoundryAgentRunner` untouched; only the factory, the runner's delegate type, DI, and Web boot change. ✓
+- **Placeholder scan:** deferred specifics are `[verify]` items tied to a Phase 0 task or a build gate with a stated fallback (capability-host `aiServicesConnections`; `Azure.AI.Agents.Persistent` direct-vs-transitive; `GetPersistentAgentsClient` vs direct ctor; agent-id stability; OTel/`clientFactory` loss; `loadTextContent`-in-`scriptContent`; dependency-cycle `roles` split; agent-author role). ✓
+- **Type consistency:** `AgentOptions.AgentId` → `MeteorologistAgentFactory.CreateAsync` → `Lazy<Task<AIAgent>>` → `FoundryAgentRunner(Func<Task<AIAgent>>)`; `agent.outputs.agentId` → `app.agentId` → `Settings__Agent__AgentId`. ✓
 
 ## Known risks / notes
 
-- **Capability-host churn:** `capabilityHosts@2025-04-01-preview` is preview and the least-stable surface; Phase 0.1 + the `what-if` gate localize it. A common report is capability-host deploys failing/slow on first enablement — retry the `create`.
-- **deploymentScripts cost/latency:** each deploy provisions a transient ACI + storage and adds minutes; `cleanupPreference: 'OnSuccess'` removes them after. Role propagation can 403 the first run — the in-script retry + `dependsOn: [roles]` mitigate it.
-- **Single replica still holds:** server-side threads decouple state from compute, so the app *could* scale past one replica later — but this migration keeps `minReplicas = maxReplicas = 1`; revisit only if needed.
-- **Guardrail unchanged:** prompt-injection enforcement is attached at the model deployment (block Guardrail), so it applies on the server-side path exactly as on the Responses path — the migration does not weaken safety.
+- **Capability-host churn** (preview); the `what-if` gate localizes it.
+- **deploymentScripts** cost/latency + role-propagation 403 (in-script retry mitigates).
+- **OTel loss on retrieval:** `GetAIAgentAsync` has no `clientFactory`; GenAI tracing moves server-side via the project connection — verify it surfaces in App Insights before relying on it.
+- **Prerelease SDK churn:** the persistent-agents `.NET`/Python method names are the most volatile surface (Task 0.4 + the `dotnet build` gate are the arbiters).
+- **Guardrail unchanged:** block Guardrail attaches at the model deployment — safety is identical on both paths.
