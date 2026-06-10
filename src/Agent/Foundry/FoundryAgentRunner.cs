@@ -5,10 +5,10 @@ using Microsoft.Agents.AI;
 
 namespace Agent.Foundry;
 
-// The agent is supplied via an async factory so it is retrieved lazily, on first use, rather than
+// The agent is supplied via an async factory so it is obtained lazily, on first use, rather than
 // when this runner is constructed. That lets UI (e.g. the /chat page) prerender with no Foundry
-// endpoint configured; the AIAgent (and its endpoint requirement) is only realized when a message
-// is sent. The factory is async because the server-side agent is retrieved by id.
+// endpoint configured; the server-side AIAgent (retrieved by name) is only realized when a message
+// is sent. The factory is async because retrieving the persistent agent is an async operation.
 public sealed class FoundryAgentRunner(Func<Task<AIAgent>> agentFactory) : IFoundryAgentRunner
 {
     // Phase 0 confirmed the run primitive is AgentSession (created async), not AgentThread/GetNewThread.

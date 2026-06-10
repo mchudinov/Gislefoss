@@ -13,9 +13,9 @@ public static class ServiceCollectionExtensions
         services.Configure<AgentOptions>(config.GetSection(AgentOptions.SectionName));
 
         services.AddSingleton<MeteorologistAgentFactory>();
-        // Memoize the async retrieval: the server-side agent is fetched once, lazily, on first use —
-        // i.e. on the first message sent, not at boot. Retrieval needs a valid ProjectEndpoint/AgentId,
-        // so deferring it via the Lazy<Task<AIAgent>> lets UI render without Foundry configured.
+        // Memoize the async retrieval: the server-side agent is fetched once, lazily, on first use
+        // (first message sent), not at boot. Retrieval needs a valid ProjectEndpoint, so deferring it
+        // via Lazy<Task<AIAgent>> lets UI (e.g. /chat prerender) render without Foundry configured.
         services.AddSingleton(sp => new Lazy<Task<AIAgent>>(
             () => sp.GetRequiredService<MeteorologistAgentFactory>().CreateAsync()));
 

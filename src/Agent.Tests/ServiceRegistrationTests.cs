@@ -15,6 +15,7 @@ public class ServiceRegistrationTests
         {
             ["Settings:Agent:ProjectEndpoint"] = "https://x.services.ai.azure.com/api/projects/p",
             ["Settings:Agent:ModelDeploymentName"] = "gpt-4o",
+            ["Settings:Agent:AgentName"] = "Gislefoss",
         }).Build();
 
         var services = new ServiceCollection()
@@ -22,7 +23,8 @@ public class ServiceRegistrationTests
             .AddMeteorologistAgent(config);
 
         // Assert the registrations WITHOUT resolving the agent — resolving it would build an
-        // AIProjectClient and reference the server-side agent. Retrieval is deferred to first use.
+        // AIProjectClient and contact Foundry. The agent is now a memoized Lazy<Task<AIAgent>>,
+        // realized only on first use.
         Assert.Contains(services, d => d.ServiceType == typeof(MeteorologistAgentFactory));
         Assert.Contains(services, d => d.ServiceType == typeof(Lazy<Task<AIAgent>>));
         Assert.Contains(services, d => d.ServiceType == typeof(IFoundryAgentRunner));

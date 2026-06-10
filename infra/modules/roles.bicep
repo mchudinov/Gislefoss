@@ -1,29 +1,28 @@
-// Role assignment: the app's managed identity -> Foundry account.
+// Provisioning RBAC: the agent-provisioner UAMI -> Foundry account.
 //
-// Responses path: the app only runs inference/responses, never authors agents, so the
-// least-privilege role is the inference one — not Azure AI Developer (agent CRUD).
-// Defaults to Cognitive Services User (account-level data-plane inference), confirmed GUID in
-// infra-phase0-findings.md Task 0.4.
+// Split RBAC (server-side agent path): the PROVISIONING identity (UAMI) authors the agent, so it
+// gets the agent-author role; the APP's runtime identity only runs inference and is granted the
+// narrower Cognitive Services User role separately in roles-app.bicep. Keeping them in separate
+// modules also breaks a would-be dependency cycle (app -> roles -> app).
 //
-// [deploy-verify] If a project-scoped run is denied (401/403), escalate to the broader
-// Azure AI Developer ('64702f94-c441-49e6-a78b-ef80e0188fee'). Note: "Azure AI User" is NOT present
-// in this tenant (Phase 0 finding), so it is not the escalation target here.
+// [deploy-verify] Azure AI Developer is the narrowest agent-author role confirmed in this tenant
+// (Phase 0 Task 0.3). Prefer "Foundry Project Manager" if it is narrower and present.
 
 param foundryName string
-param principalId string
+param provisionerPrincipalId string
 
 resource foundry 'Microsoft.CognitiveServices/accounts@2025-06-01' existing = {
   name: foundryName
 }
 
-var cognitiveServicesUser = 'a97b65f3-24c7-4388-baec-2e87135dc908'
+var azureAiDeveloper = '64702f94-c441-49e6-a78b-ef80e0188fee'
 
-resource ra 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource provisionerRa 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: foundry
-  name: guid(foundry.id, principalId, cognitiveServicesUser)
+  name: guid(foundry.id, provisionerPrincipalId, azureAiDeveloper)
   properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', cognitiveServicesUser)
-    principalId: principalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', azureAiDeveloper)
+    principalId: provisionerPrincipalId
     principalType: 'ServicePrincipal'
   }
 }

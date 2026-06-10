@@ -86,6 +86,36 @@ resource project 'Microsoft.CognitiveServices/accounts/projects@2025-06-01' = {
   properties: {}
 }
 
+// --- Agent Service enablement (Basic setup: Foundry-onboard storage) ---
+// The capability host enables the Agents data plane on the account+project. BASIC setup omits the
+// storageConnections / threadStorageConnections / vectorStoreConnections properties so Foundry-managed
+// storage is used (no BYO Cosmos/Storage/Search).
+// [deploy-verify] API version 2025-04-01-preview and the capabilityHostKind: 'Agents' property shape.
+// [deploy-verify] Whether the project caphost needs aiServicesConnections when the model deployment
+// lives on THIS same account — expected unnecessary for the single-account topology; if 'what-if'
+// rejects the empty properties bag, set it to the in-account deployment connection name.
+resource accountCapHost 'Microsoft.CognitiveServices/accounts/capabilityHosts@2025-04-01-preview' = {
+  parent: foundry
+  name: '${foundryName}-caphost'
+  properties: {
+    capabilityHostKind: 'Agents'
+  }
+  dependsOn: [
+    project
+  ]
+}
+
+resource projectCapHost 'Microsoft.CognitiveServices/accounts/projects/capabilityHosts@2025-04-01-preview' = {
+  parent: project
+  name: '${project.name}-caphost'
+  properties: {
+    capabilityHostKind: 'Agents'
+  }
+  dependsOn: [
+    accountCapHost
+  ]
+}
+
 output foundryName string = foundry.name
 output projectName string = project.name
 output projectEndpoint string = 'https://${foundryName}.services.ai.azure.com/api/projects/${project.name}'

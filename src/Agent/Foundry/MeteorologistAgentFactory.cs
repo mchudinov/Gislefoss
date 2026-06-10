@@ -1,5 +1,5 @@
-using Azure.AI.Extensions.OpenAI;   // AgentReference — the by-id reference to a server-side agent
-using Azure.AI.Projects;
+using Azure.AI.Extensions.OpenAI;   // AgentReference (name + optional version) for server-side agent retrieval
+using Azure.AI.Projects;            // AIProjectClient + AsAIAgent(AgentReference) extension
 using Azure.Identity;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.Options;
@@ -11,24 +11,20 @@ public sealed class MeteorologistAgentFactory(IOptions<AgentOptions> options)
     private readonly AgentOptions _o = options.Value;
 
     /// <summary>
-    /// Retrieves the server-side persistent agent by id and wraps it as an <see cref="AIAgent"/>.
-    /// The persona/instructions live server-side (provisioned by infra/modules/agent.bicep on each
-    /// deploy); this no longer reads any local persona file.
+    /// Retrieves the server-side persistent agent <b>by name</b> and wraps it as an
+    /// <see cref="AIAgent"/>. Retrieval is NAME-keyed via <see cref="AgentReference"/>; the server
+    /// resolves the latest version (no version pinned). The persona/instructions live server-side
+    /// (provisioned by infra/modules/agent.bicep on each deploy); this reads no local persona file.
     /// </summary>
-    /// <remarks>
-    /// The installed SDK exposes no <c>PersistentAgentsClient.GetAIAgentAsync</c>; the by-id path is
-    /// <see cref="AIProjectClientExtensions.AsAIAgent(AIProjectClient, AgentReference, System.Collections.Generic.IList{Microsoft.Extensions.AI.AITool}, System.Func{Microsoft.Extensions.AI.IChatClient, Microsoft.Extensions.AI.IChatClient}, System.IServiceProvider)"/>,
-    /// which returns a <c>FoundryAgent</c> (an <see cref="AIAgent"/>) and makes no network call at
-    /// construction. It is synchronous, so the <see cref="Task{AIAgent}"/> contract is satisfied via
-    /// <see cref="Task.FromResult{TResult}"/> — this keeps the async DI/runner wiring unchanged.
-    /// </remarks>
     public Task<AIAgent> CreateAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(_o.AgentId))
-            throw new InvalidOperationException("Settings:Agent:AgentId is not configured.");
+        if (string.IsNullOrWhiteSpace(_o.AgentName))
+            throw new InvalidOperationException("Settings:Agent:AgentName is not configured.");
 
         var project = new AIProjectClient(new Uri(_o.ProjectEndpoint), new DefaultAzureCredential());
-        AIAgent agent = project.AsAIAgent(new AgentReference(_o.AgentId));
+        // Name-keyed retrieval: AgentReference.Name must match the agent's display name ("Gislefoss");
+        // version defaults to null so Foundry resolves the latest version of that named agent.
+        AIAgent agent = project.AsAIAgent(new AgentReference(_o.AgentName));
         return Task.FromResult(agent);
     }
 }

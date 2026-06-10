@@ -70,7 +70,6 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'Settings__Agent__ProjectEndpoint', value: projectEndpoint }
             { name: 'Settings__Agent__ModelDeploymentName', value: modelDeploymentName }
             { name: 'Settings__Agent__AgentName', value: 'Gislefoss' }
-            { name: 'Settings__Agent__PersonaPath', value: 'personas/gislefoss.md' }
           ]
         }
       ]

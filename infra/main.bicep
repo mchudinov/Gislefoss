@@ -12,8 +12,11 @@ param modelName string = 'gpt-4o'
 @description('Chat model version for the deployment.')
 param modelVersion string = '2024-11-20'
 
-@description('Fully-qualified Web container image (registry/repo:tag).')
-param containerImage string
+@description('Fully-qualified Web container image (registry/repo:tag). Required only when deployApp is true.')
+param containerImage string = ''
+
+@description('Deploy the Web app + its inference role assignment. Set false to provision only the Foundry account, capability hosts, provisioning identity/role, and the agent (staging the agent before the app exists).')
+param deployApp bool = true
 
 @description('Resource tags.')
 param tags object = {
@@ -23,6 +26,11 @@ param tags object = {
 var foundryName = '${namePrefix}-aifoundry'
 var guardrailName = '${namePrefix}guardrail'
 var deploymentName = 'chat'
+var agentName = 'Gislefoss'
+
+// Persona markdown embedded at compile time from the git source. Path is relative to THIS file
+// (infra/main.bicep) -> repo-root/src/Web/personas/gislefoss.md.
+var personaText = loadTextContent('../src/Web/personas/gislefoss.md')
 
 module foundry 'modules/foundry.bicep' = {
   name: 'foundry'
@@ -46,7 +54,53 @@ module obs 'modules/observability.bicep' = {
   }
 }
 
-module app 'modules/app.bicep' = {
+// Provisioning identity (UAMI) the agent-upsert deploymentScript runs as — always provisioned.
+module identity 'modules/identity.bicep' = {
+  name: 'identity'
+  params: {
+    namePrefix: namePrefix
+    location: location
+    tags: tags
+  }
+}
+
+// Provisioner RBAC: UAMI -> Azure AI Developer on the Foundry account (agent-author).
+module roles 'modules/roles.bicep' = {
+  name: 'roles'
+  params: {
+    foundryName: foundry.outputs.foundryName
+    provisionerPrincipalId: identity.outputs.principalId
+  }
+  dependsOn: [
+    foundry
+  ]
+}
+
+// Agent upsert (in-deployment, persona from git) — always runs so the agent is staged before the
+// app exists. dependsOn roles (the UAMI role must propagate) + foundry (capability host enabled).
+module agent 'modules/agent.bicep' = {
+  name: 'agent'
+  params: {
+    namePrefix: namePrefix
+    location: location
+    tags: tags
+    projectEndpoint: foundry.outputs.projectEndpoint
+    modelDeploymentName: foundry.outputs.deploymentName
+    agentName: agentName
+    agentInstructions: personaText
+    uamiId: identity.outputs.id
+    uamiClientId: identity.outputs.clientId
+  }
+  dependsOn: [
+    roles
+    foundry
+  ]
+}
+
+// --- App (optional) ---
+// The app retrieves the agent LAZILY BY NAME at runtime, so it consumes NO agent output — there is
+// no edge between `app` and `agent` in either direction, keeping the graph acyclic.
+module app 'modules/app.bicep' = if (deployApp) {
   name: 'app'
   params: {
     namePrefix: namePrefix
@@ -61,8 +115,9 @@ module app 'modules/app.bicep' = {
   }
 }
 
-module roles 'modules/roles.bicep' = {
-  name: 'roles'
+// App inference RBAC: app identity -> Cognitive Services User on the Foundry account.
+module rolesApp 'modules/roles-app.bicep' = if (deployApp) {
+  name: 'rolesApp'
   params: {
     foundryName: foundry.outputs.foundryName
     principalId: app.outputs.principalId
@@ -71,4 +126,5 @@ module roles 'modules/roles.bicep' = {
 
 output projectEndpoint string = foundry.outputs.projectEndpoint
 output deploymentName string = foundry.outputs.deploymentName
-output appUrl string = 'https://${app.outputs.fqdn}'
+output agentName string = agent.outputs.agentName
+output appUrl string = deployApp ? 'https://${app.outputs.fqdn}' : ''
