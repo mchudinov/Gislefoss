@@ -30,6 +30,11 @@ resource foundry 'Microsoft.CognitiveServices/accounts@2025-06-01' = {
     allowProjectManagement: true
     customSubDomainName: foundryName
     disableLocalAuth: true // Entra-only; no API keys
+    // Once capability hosts (Agents) + disableLocalAuth are set, the CognitiveServices RP requires
+    // publicNetworkAccess to be EXPLICITLY present on update PUTs (idempotent re-deploys fail with
+    // "PublicNetworkAccess is required for this resouce" otherwise). Enabled = reachable over the
+    // internet by the app and the agent-upsert script (no private endpoint in this topology).
+    publicNetworkAccess: 'Enabled'
   }
 }
 

@@ -9,7 +9,10 @@
 // Retrieval is name-keyed, so this module outputs only the agent NAME (no asst_ id).
 
 param namePrefix string
-param location string
+
+@description('Region for the deployment-script ACI. Decoupled from the Foundry region: the script only needs network access to the project endpoint, so it runs where ACI capacity is reliable (Sweden Central is ACI-tight). The Sweden Central UAMI works here — managed identities are not region-bound.')
+param scriptLocation string
+
 param tags object
 param projectEndpoint string
 param modelDeploymentName string
@@ -26,11 +29,15 @@ param forceUpdateTag string = utcNow()
 // body is embedded via concatenation of single-quoted strings (which DO support \n, \', and ${}).
 // The heredoc delimiter <<'PYEOF' must keep its literal single quotes -> escaped as \'.
 var agentScript = loadTextContent('../scripts/upsert-agent.py')
-var scriptContent = 'set -euo pipefail\npip install --quiet azure-ai-agents azure-ai-projects azure-identity\ncat > /tmp/upsert-agent.py <<\'PYEOF\'\n${agentScript}\nPYEOF\npython3 /tmp/upsert-agent.py\n'
+// azure-ai-projects pinned to the 2.x beta whose surface (agents.create_version / PromptAgentDefinition)
+// upsert-agent.py is written against and which matches the .NET runtime's name-keyed agent_reference.
+// The exact pin + --pre guarantees a reproducible surface (an unpinned install would grab the latest
+// STABLE 1.x, whose agents API differs and lacks create_version).
+var scriptContent = 'set -euo pipefail\npip install --quiet --pre "azure-ai-projects==2.0.0b2" azure-identity\ncat > /tmp/upsert-agent.py <<\'PYEOF\'\n${agentScript}\nPYEOF\npython3 /tmp/upsert-agent.py\n'
 
 resource upsert 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
   name: '${namePrefix}-agent-upsert'
-  location: location
+  location: scriptLocation
   tags: tags
   kind: 'AzureCLI'
   identity: {

@@ -1,16 +1,19 @@
 # upsert-agent.py — ensure a persistent Foundry agent NAMED $AGENT_NAME exists in the project with
-# the given persona ($AGENT_INSTRUCTIONS) and model ($MODEL_DEPLOYMENT_NAME). Idempotent
-# upsert-by-NAME: create if absent, else update the existing same-named agent in place. The agent
-# is retrieved at runtime by NAME (AgentReference), so this emits only the agent name (no asst_ id).
+# the given persona ($AGENT_INSTRUCTIONS) and model ($MODEL_DEPLOYMENT_NAME). The agent is retrieved
+# at runtime BY NAME (.NET AgentReference -> Responses `agent_reference`), so this emits only the
+# agent name (no asst_ id).
+#
+# SDK surface (verified against azure-ai-projects 2.0.0b2, api 2025-11-15-preview):
+#   AIProjectClient(endpoint, credential).agents
+#     .create_version(agent_name, *, definition=AgentDefinition) -> AgentVersionObject  # add a version
+#     .create(*, name, definition=AgentDefinition)              -> AgentObject          # create + v1
+#     .get(agent_name)                                          -> AgentObject
+#   PromptAgentDefinition(*, model, instructions)  # the "simple agent" definition (kind='prompt')
+# This matches the .NET runtime, which resolves the agent by name and calls it as an agent_reference.
+# Each deploy publishes a NEW version with the current persona; name-keyed retrieval gets the latest.
 #
 # Auth: the deploymentScript runs as a user-assigned managed identity (UAMI) granted Azure AI
 # Developer on the Foundry account; we authenticate with ManagedIdentityCredential(client_id=...).
-#
-# [DEPLOY-VERIFY] The exact azure-ai-agents / azure-ai-projects Python SDK surface (client class,
-# list/create/update method names and their kwargs) is a DEPLOY-TIME unknown — this is the most
-# plausible shape against the current preview SDKs. If a name/signature is wrong, the fix is local:
-# the create-vs-update branch below is intentionally obvious. Verified at deploy against the SDK
-# version pinned by agent.bicep's `pip install`.
 
 import json
 import os
@@ -18,12 +21,9 @@ import sys
 import time
 
 from azure.identity import ManagedIdentityCredential
-
-# [DEPLOY-VERIFY] Client surface. Two plausible import paths depending on the installed SDK:
-#   (a) azure-ai-agents:   from azure.ai.agents import AgentsClient; AgentsClient(endpoint, credential)
-#   (b) azure-ai-projects: from azure.ai.projects import AIProjectClient; project.agents.<...>
-# We use (a) here; if only (b) is installed, swap to project.agents and the same method names.
-from azure.ai.agents import AgentsClient  # [DEPLOY-VERIFY] import path / client class name
+from azure.core.exceptions import ResourceNotFoundError
+from azure.ai.projects import AIProjectClient
+from azure.ai.projects.models import PromptAgentDefinition
 
 ENDPOINT = os.environ["PROJECT_ENDPOINT"]
 MODEL = os.environ["MODEL_DEPLOYMENT_NAME"]
@@ -32,45 +32,42 @@ INSTRUCTIONS = os.environ["AGENT_INSTRUCTIONS"]
 CLIENT_ID = os.environ["UAMI_CLIENT_ID"]
 
 credential = ManagedIdentityCredential(client_id=CLIENT_ID)
-client = AgentsClient(endpoint=ENDPOINT, credential=credential)
+project = AIProjectClient(endpoint=ENDPOINT, credential=credential)
 
-agent = None
+
+def upsert():
+    """Upsert the agent by NAME. create_version adds a version to the named agent; if the agent does
+    not exist yet (first deploy), create it (which also publishes its first version)."""
+    definition = PromptAgentDefinition(model=MODEL, instructions=INSTRUCTIONS)
+    try:
+        return project.agents.create_version(agent_name=NAME, definition=definition)
+    except ResourceNotFoundError:
+        # First deploy: the named agent doesn't exist yet -> create it (+ v1).
+        return project.agents.create(name=NAME, definition=definition)
+
+
+result = None
 last_error = None
-# Retry ~6 minutes (12 x 30s) to tolerate role-assignment propagation 403s after deploy.
+# Retry ~6 minutes (12 x 30s) to tolerate role-assignment propagation 403s right after deploy.
+# ResourceNotFoundError is handled INSIDE upsert() (create-if-absent), so it never lands here.
 for attempt in range(12):
     try:
-        # [DEPLOY-VERIFY] list/create/update method names + kwargs.
-        existing = next((a for a in client.list_agents() if a.name == NAME), None)
-        if existing is not None:
-            # Update the existing same-named agent in place (keeps the name stable across deploys).
-            agent = client.update_agent(
-                existing.id,
-                model=MODEL,
-                name=NAME,
-                instructions=INSTRUCTIONS,
-            )
-        else:
-            # Create a new agent with the desired name.
-            agent = client.create_agent(
-                model=MODEL,
-                name=NAME,
-                instructions=INSTRUCTIONS,
-            )
+        result = upsert()
         break
     except Exception as e:  # noqa: BLE001 — retry any transient/auth-propagation error
         last_error = e
-        sys.stderr.write(f"attempt {attempt}: {e}\n")
+        sys.stderr.write(f"attempt {attempt}: {type(e).__name__}: {e}\n")
         time.sleep(30)
 else:
     raise SystemExit(f"agent upsert failed after retries: {last_error}")
 
-# Emit ONLY the agent name (+ version if the SDK exposes one) — retrieval is name-keyed; no asst_ id.
+# Emit ONLY the agent name (+ version if exposed) — retrieval is name-keyed; no asst_ id.
 output = {"agentName": NAME}
-version = getattr(agent, "version", None)  # [DEPLOY-VERIFY] attribute name if a version is exposed
+version = getattr(result, "agentVersion", None) or getattr(result, "version", None)
 if version is not None:
     output["agentVersion"] = str(version)
 
 with open(os.environ["AZ_SCRIPTS_OUTPUT_PATH"], "w") as f:
     json.dump(output, f)
 
-print(f"agent upserted by name: {NAME}")
+print(f"agent upserted by name: {NAME} (version: {output.get('agentVersion', 'n/a')})")

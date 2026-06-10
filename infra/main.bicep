@@ -6,6 +6,9 @@ param namePrefix string = 'gislefoss'
 @description('Azure region.')
 param location string = resourceGroup().location
 
+@description('Region for the agent-upsert deployment-script ACI only. Defaults to West Europe because Sweden Central has tight ACI capacity (DeploymentScriptACIProvisioningTimeout). All other resources use `location`.')
+param agentScriptLocation string = 'westeurope'
+
 @description('Chat model name for the deployment.')
 param modelName string = 'gpt-4o'
 
@@ -82,7 +85,7 @@ module agent 'modules/agent.bicep' = {
   name: 'agent'
   params: {
     namePrefix: namePrefix
-    location: location
+    scriptLocation: agentScriptLocation
     tags: tags
     projectEndpoint: foundry.outputs.projectEndpoint
     modelDeploymentName: foundry.outputs.deploymentName
