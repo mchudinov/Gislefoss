@@ -5,14 +5,15 @@ using Microsoft.Agents.AI;
 
 namespace Agent.Foundry;
 
-// The agent is supplied via a factory so it is built lazily, on first use, rather than when this
-// runner is constructed. That lets UI (e.g. the /chat page) prerender with no Foundry endpoint
-// configured; the AIAgent (and its endpoint requirement) is only realized when a message is sent.
-public sealed class FoundryAgentRunner(Func<AIAgent> agentFactory) : IFoundryAgentRunner
+// The agent is supplied via an async factory so it is retrieved lazily, on first use, rather than
+// when this runner is constructed. That lets UI (e.g. the /chat page) prerender with no Foundry
+// endpoint configured; the AIAgent (and its endpoint requirement) is only realized when a message
+// is sent. The factory is async because the server-side agent is retrieved by id.
+public sealed class FoundryAgentRunner(Func<Task<AIAgent>> agentFactory) : IFoundryAgentRunner
 {
     // Phase 0 confirmed the run primitive is AgentSession (created async), not AgentThread/GetNewThread.
     public async Task<object> StartThreadAsync(CancellationToken ct)
-        => await agentFactory().CreateSessionAsync(ct);
+        => await (await agentFactory()).CreateSessionAsync(ct);
 
     public async Task<RunResult> SendAsync(object thread, string userText, CancellationToken ct)
     {
@@ -20,7 +21,8 @@ public sealed class FoundryAgentRunner(Func<AIAgent> agentFactory) : IFoundryAge
         {
             // Phase 0 confirmed the 2-arg RunAsync(text, session) → AgentResponse.
             // Thread `ct` through once the CancellationToken overload is verified at build.
-            var response = await agentFactory().RunAsync(userText, (AgentSession)thread);
+            var agent = await agentFactory();
+            var response = await agent.RunAsync(userText, (AgentSession)thread);
             return new RunResult(RunState.Completed, response.Text, GuardrailMetadata: null, ErrorCode: null);
         }
         catch (ClientResultException ex) when (ex.Status == 400 && IsContentFilter(ex)) // Phase 0.2 contract

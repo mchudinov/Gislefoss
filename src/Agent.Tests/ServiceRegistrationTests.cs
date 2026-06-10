@@ -15,17 +15,16 @@ public class ServiceRegistrationTests
         {
             ["Settings:Agent:ProjectEndpoint"] = "https://x.services.ai.azure.com/api/projects/p",
             ["Settings:Agent:ModelDeploymentName"] = "gpt-4o",
-            ["Settings:Agent:PersonaPath"] = "personas/gislefoss.md",
         }).Build();
 
         var services = new ServiceCollection()
             .AddSingleton<IConfiguration>(config)
             .AddMeteorologistAgent(config);
 
-        // Assert the registrations WITHOUT resolving the AIAgent — resolving it would read the
-        // persona file / build an AIProjectClient. Eager construction is forced only in Program.cs.
+        // Assert the registrations WITHOUT resolving the agent — resolving it would build an
+        // AIProjectClient and reference the server-side agent. Retrieval is deferred to first use.
         Assert.Contains(services, d => d.ServiceType == typeof(MeteorologistAgentFactory));
-        Assert.Contains(services, d => d.ServiceType == typeof(AIAgent));
+        Assert.Contains(services, d => d.ServiceType == typeof(Lazy<Task<AIAgent>>));
         Assert.Contains(services, d => d.ServiceType == typeof(IFoundryAgentRunner));
         Assert.Contains(services, d => d.ServiceType == typeof(IMeteorologistConversation));
 

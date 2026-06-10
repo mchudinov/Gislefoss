@@ -13,14 +13,14 @@ public static class ServiceCollectionExtensions
         services.Configure<AgentOptions>(config.GetSection(AgentOptions.SectionName));
 
         services.AddSingleton<MeteorologistAgentFactory>();
-        // The AIAgent is built on first resolution of this singleton — i.e. on the first message sent,
-        // not at boot. Program.cs validates only the persona eagerly (MeteorologistAgentFactory.ReadPersona);
-        // it does not force the agent. Construction needs a valid ProjectEndpoint, so it is deferred via
-        // the runner's Func<AIAgent> below to let UI render without Foundry configured.
-        services.AddSingleton<AIAgent>(sp => sp.GetRequiredService<MeteorologistAgentFactory>().Create());
+        // Memoize the async retrieval: the server-side agent is fetched once, lazily, on first use —
+        // i.e. on the first message sent, not at boot. Retrieval needs a valid ProjectEndpoint/AgentId,
+        // so deferring it via the Lazy<Task<AIAgent>> lets UI render without Foundry configured.
+        services.AddSingleton(sp => new Lazy<Task<AIAgent>>(
+            () => sp.GetRequiredService<MeteorologistAgentFactory>().CreateAsync()));
 
         services.AddSingleton<IFoundryAgentRunner>(sp =>
-            new FoundryAgentRunner(() => sp.GetRequiredService<AIAgent>()));
+            new FoundryAgentRunner(() => sp.GetRequiredService<Lazy<Task<AIAgent>>>().Value));
         services.AddSingleton<RunOutcomeInspector>();
         services.AddScoped<IMeteorologistConversation, MeteorologistConversation>();
         return services;
