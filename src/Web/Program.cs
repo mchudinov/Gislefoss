@@ -60,8 +60,9 @@ public class Program
 
             var app = builder.Build();
 
-            // Fail fast at boot if the persona is missing/empty (does not contact Azure).
-            app.Services.GetRequiredService<Agent.Foundry.MeteorologistAgentFactory>().ReadPersona();
+            // The persona now lives server-side on the persistent agent (provisioned by Bicep); the
+            // app retrieves the agent lazily by id (Settings:Agent:AgentId) on the first chat turn.
+            // No boot-time Foundry contact — the UI prerenders without an agent configured.
 
             if (!app.Environment.IsDevelopment())
             {
