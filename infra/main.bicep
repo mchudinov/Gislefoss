@@ -32,8 +32,8 @@ var deploymentName = 'chat'
 var agentName = 'Gislefoss'
 
 // Persona markdown embedded at compile time from the git source. Path is relative to THIS file
-// (infra/main.bicep) -> repo-root/src/Web/personas/gislefoss.md.
-var personaText = loadTextContent('../src/Web/personas/gislefoss.md')
+// (infra/main.bicep) -> repo-root/personas/gislefoss.md.
+var personaText = loadTextContent('../personas/gislefoss.md')
 
 module foundry 'modules/foundry.bicep' = {
   name: 'foundry'
