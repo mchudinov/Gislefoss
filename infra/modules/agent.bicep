@@ -27,13 +27,19 @@ param forceUpdateTag string = utcNow()
 
 // Bicep multi-line ''' ''' strings are VERBATIM (no ${} interpolation, no escapes), so the script
 // body is embedded via concatenation of single-quoted strings (which DO support \n, \', and ${}).
-// The heredoc delimiter <<'PYEOF' must keep its literal single quotes -> escaped as \'.
+// Each heredoc delimiter (<<'PYEOF', <<'GISLEFOSS_PERSONA_EOF') keeps its literal single quotes ->
+// escaped as \', so the body is taken verbatim (no shell expansion of $/backticks in the persona).
 var agentScript = loadTextContent('../scripts/upsert-agent.py')
+// The persona is written into scriptContent (a heredoc -> /tmp/persona.md), NOT passed as the
+// AGENT_INSTRUCTIONS env var: a ~9 KB env var prevents the ACI container group from provisioning
+// (DeploymentScriptACIProvisioningTimeout — verified by isolation A/B/C). scriptContent rides the
+// deploymentScript's storage-backed file share, which has no such limit. upsert-agent.py reads the
+// file via AGENT_INSTRUCTIONS_FILE.
 // azure-ai-projects pinned to the 2.x beta whose surface (agents.create_version / PromptAgentDefinition)
 // upsert-agent.py is written against and which matches the .NET runtime's name-keyed agent_reference.
 // The exact pin + --pre guarantees a reproducible surface (an unpinned install would grab the latest
 // STABLE 1.x, whose agents API differs and lacks create_version).
-var scriptContent = 'set -euo pipefail\npip install --quiet --pre "azure-ai-projects==2.0.0b2" azure-identity\ncat > /tmp/upsert-agent.py <<\'PYEOF\'\n${agentScript}\nPYEOF\npython3 /tmp/upsert-agent.py\n'
+var scriptContent = 'set -euo pipefail\npip install --quiet --pre "azure-ai-projects==2.0.0b2" azure-identity\ncat > /tmp/persona.md <<\'GISLEFOSS_PERSONA_EOF\'\n${agentInstructions}\nGISLEFOSS_PERSONA_EOF\ncat > /tmp/upsert-agent.py <<\'PYEOF\'\n${agentScript}\nPYEOF\npython3 /tmp/upsert-agent.py\n'
 
 resource upsert 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
   name: '${namePrefix}-agent-upsert'
@@ -56,7 +62,7 @@ resource upsert 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
       { name: 'PROJECT_ENDPOINT', value: projectEndpoint }
       { name: 'MODEL_DEPLOYMENT_NAME', value: modelDeploymentName }
       { name: 'AGENT_NAME', value: agentName }
-      { name: 'AGENT_INSTRUCTIONS', value: agentInstructions }
+      { name: 'AGENT_INSTRUCTIONS_FILE', value: '/tmp/persona.md' }
       { name: 'UAMI_CLIENT_ID', value: uamiClientId }
     ]
     scriptContent: scriptContent

@@ -25,10 +25,21 @@ from azure.core.exceptions import ResourceNotFoundError
 from azure.ai.projects import AIProjectClient
 from azure.ai.projects.models import PromptAgentDefinition
 
+def _read_instructions():
+    """The persona is delivered as a FILE (written by the deploymentScript's scriptContent into the
+    storage-backed file share), not as the AGENT_INSTRUCTIONS env var: a ~9 KB env var pushes the ACI
+    container-group definition past a limit so it never reaches running state (DeploymentScriptACI-
+    ProvisioningTimeout). AGENT_INSTRUCTIONS (env var) is still honored as a fallback for local/test
+    runs. CRLF is normalized to LF because the persona file is checked in with CRLF terminators."""
+    path = os.environ.get("AGENT_INSTRUCTIONS_FILE")
+    text = open(path, encoding="utf-8").read() if path else os.environ["AGENT_INSTRUCTIONS"]
+    return text.replace("\r\n", "\n")
+
+
 ENDPOINT = os.environ["PROJECT_ENDPOINT"]
 MODEL = os.environ["MODEL_DEPLOYMENT_NAME"]
 NAME = os.environ["AGENT_NAME"]
-INSTRUCTIONS = os.environ["AGENT_INSTRUCTIONS"]
+INSTRUCTIONS = _read_instructions()
 CLIENT_ID = os.environ["UAMI_CLIENT_ID"]
 
 credential = ManagedIdentityCredential(client_id=CLIENT_ID)
