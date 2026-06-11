@@ -115,6 +115,8 @@ module app 'modules/app.bicep' = if (deployApp) {
     appInsightsConnectionString: obs.outputs.appInsightsConnectionString
     projectEndpoint: foundry.outputs.projectEndpoint
     modelDeploymentName: foundry.outputs.deploymentName
+    // Same var the agent module upserts under — one source of truth for create-name == retrieve-name.
+    agentName: agentName
   }
 }
 

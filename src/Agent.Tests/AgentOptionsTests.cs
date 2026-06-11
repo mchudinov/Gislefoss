@@ -5,10 +5,12 @@ using Xunit;
 public class AgentOptionsTests
 {
     [Fact]
-    public void Defaults_AgentName_To_Gislefoss()
+    public void Defaults_AgentName_To_Empty()
     {
+        // Empty by default so a missing config value fails fast in the factory (parity with
+        // ProjectEndpoint/ModelDeploymentName). The real default lives in config, not the POCO.
         var options = new AgentOptions();
-        Assert.Equal("Gislefoss", options.AgentName);
+        Assert.Equal("", options.AgentName);
     }
 
     [Fact]

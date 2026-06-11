@@ -11,6 +11,7 @@ param workspaceName string
 param appInsightsConnectionString string
 param projectEndpoint string
 param modelDeploymentName string
+param agentName string
 
 // Resolve the workspace key here (not in main) so the dependency is explicit and no secure value
 // is passed as a module output.
@@ -69,7 +70,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'DOTNET_ENVIRONMENT', value: 'Production' }
             { name: 'Settings__Agent__ProjectEndpoint', value: projectEndpoint }
             { name: 'Settings__Agent__ModelDeploymentName', value: modelDeploymentName }
-            { name: 'Settings__Agent__AgentName', value: 'Gislefoss' }
+            { name: 'Settings__Agent__AgentName', value: agentName }
           ]
         }
       ]
