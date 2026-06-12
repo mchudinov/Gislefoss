@@ -13,7 +13,7 @@ public sealed class AgentOptions
     /// container as Settings__Agent__AgentName (sourced from main.bicep's single agentName var).
     /// Defaults to "" so a missing config value fails fast in the factory — matching
     /// ProjectEndpoint/ModelDeploymentName — rather than silently falling back to a name that may
-    /// not match the provisioned agent. The effective default ("Gislefoss") lives in config
+    /// not match the provisioned agent. The effective default ("agent-gislefoss-sdc") lives in config
     /// (appsettings.json / the Bicep env var).
     /// </summary>
     public string AgentName { get; set; } = "";

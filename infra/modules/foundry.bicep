@@ -8,12 +8,22 @@
 // missing on the older version.
 
 param foundryName string
+
+@description('Foundry project (accounts/projects) name — CAF proj-<project>-<region>, passed from main so naming lives in one place.')
+param projectName string
+
 param location string
 param guardrailName string
 param deploymentName string
 param modelName string
 param modelVersion string
 param tags object
+
+@description('Provision the embedding model deployment (needed only for memory retrieval). When false the embedding deployment is skipped and no embedding cost is incurred.')
+param deployEmbedding bool = false
+param embeddingDeploymentName string = ''
+param embeddingModelName string = ''
+param embeddingModelVersion string = ''
 
 resource foundry 'Microsoft.CognitiveServices/accounts@2025-06-01' = {
   name: foundryName
@@ -79,11 +89,36 @@ resource deployment 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01
   }
 }
 
+// Embedding model for memory RETRIEVAL (vector recall over stored memories). Provisioned only when
+// deployEmbedding is true (memory opt-in). Serialized after the chat deployment: two deployments on
+// the SAME CognitiveServices account cannot be created concurrently (the RP rejects parallel
+// deployment PUTs). No raiPolicyName: the block Guardrail targets prompt/completion TEXT, not
+// embedding vectors, and attaching an RAI policy to an embedding deployment is [deploy-verify] — the
+// Guardrail stays on the chat deployment where the user-facing I/O actually flows.
+resource embeddingDeployment 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = if (deployEmbedding) {
+  parent: foundry
+  name: embeddingDeploymentName
+  sku: {
+    name: 'Standard'
+    capacity: 50
+  }
+  properties: {
+    model: {
+      format: 'OpenAI'
+      name: embeddingModelName
+      version: embeddingModelVersion
+    }
+  }
+  dependsOn: [
+    deployment
+  ]
+}
+
 // Foundry project (child). Confirmed type Microsoft.CognitiveServices/accounts/projects
 // (infra-phase0-findings.md Task 0.1).
 resource project 'Microsoft.CognitiveServices/accounts/projects@2025-06-01' = {
   parent: foundry
-  name: '${foundryName}proj'
+  name: projectName
   location: location
   identity: {
     type: 'SystemAssigned'
@@ -125,3 +160,6 @@ output foundryName string = foundry.name
 output projectName string = project.name
 output projectEndpoint string = 'https://${foundryName}.services.ai.azure.com/api/projects/${project.name}'
 output deploymentName string = deployment.name
+// Read from the param (not embeddingDeployment.name) so the output resolves whether or not the
+// conditional resource was created.
+output embeddingDeploymentName string = deployEmbedding ? embeddingDeploymentName : ''

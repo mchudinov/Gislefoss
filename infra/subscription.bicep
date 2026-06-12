@@ -10,14 +10,20 @@ targetScope = 'subscription'
 @description('Azure region for the resource group and ALL resources.')
 param location string = 'swedencentral'
 
-@description('Name of the resource group to create.')
-param resourceGroupName string = 'rg-gislefoss'
+@description('Name of the resource group to create (Azure CAF: rg-<project>-<region>).')
+param resourceGroupName string = 'rg-gislefoss-sdc'
 
 @description('Short base name for all resources (lowercase).')
 param namePrefix string = 'gislefoss'
 
 @description('Region for the agent-upsert deployment-script ACI only (Sweden Central has tight ACI capacity). All other resources use `location`.')
 param agentScriptLocation string = 'westeurope'
+
+@description('Region abbreviation embedded in resource names (Azure CAF: <abbrev>-<project>-<region>). Keep in sync with `location`. sdc = Sweden Central.')
+param regionCode string = 'sdc'
+
+@description('Region abbreviation for the deployment-script ACI resource names (they deploy to agentScriptLocation). weu = West Europe.')
+param scriptRegionCode string = 'weu'
 
 @description('Deploy the Web app + its inference role assignment. Set false to provision only the AI backend (Foundry account, capability hosts, provisioning identity/role, and the agent) before a container image exists.')
 param deployApp bool = false
@@ -43,6 +49,8 @@ module main 'main.bicep' = {
     namePrefix: namePrefix
     location: location
     agentScriptLocation: agentScriptLocation
+    regionCode: regionCode
+    scriptRegionCode: scriptRegionCode
     deployApp: deployApp
     containerImage: containerImage
     tags: tags

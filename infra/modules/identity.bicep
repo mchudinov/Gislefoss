@@ -3,11 +3,15 @@
 // then provisions/updates the persistent agent's persona on each deploy.
 
 param namePrefix string
+
+@description('Region abbreviation for resource names (CAF <abbrev>-<project>-<region>).')
+param regionCode string
+
 param location string
 param tags object
 
 resource uami 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
-  name: '${namePrefix}-agent-provisioner'
+  name: 'id-${namePrefix}-${regionCode}'
   location: location
   tags: tags
 }

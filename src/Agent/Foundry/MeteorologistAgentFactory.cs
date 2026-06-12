@@ -22,7 +22,7 @@ public sealed class MeteorologistAgentFactory(IOptions<AgentOptions> options)
             throw new InvalidOperationException("Settings:Agent:AgentName is not configured.");
 
         var project = new AIProjectClient(new Uri(_o.ProjectEndpoint), new DefaultAzureCredential());
-        // Name-keyed retrieval: AgentReference.Name must match the agent's display name ("Gislefoss");
+        // Name-keyed retrieval: AgentReference.Name must match the agent's display name ("agent-gislefoss-sdc");
         // version defaults to null so Foundry resolves the latest version of that named agent.
         AIAgent agent = project.AsAIAgent(new AgentReference(_o.AgentName));
         return Task.FromResult(agent);

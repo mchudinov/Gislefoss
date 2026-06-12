@@ -10,6 +10,9 @@
 
 param namePrefix string
 
+@description('Region abbreviation for the deployment-script resource name (CAF script-<project>-<purpose>-<region>). This ACI deploys to scriptLocation (West Europe), so it is weu, not the Foundry region.')
+param regionCode string
+
 @description('Region for the deployment-script ACI. Decoupled from the Foundry region: the script only needs network access to the project endpoint, so it runs where ACI capacity is reliable (Sweden Central is ACI-tight). The Sweden Central UAMI works here — managed identities are not region-bound.')
 param scriptLocation string
 
@@ -42,7 +45,7 @@ var agentScript = loadTextContent('../scripts/upsert-agent.py')
 var scriptContent = 'set -euo pipefail\npip install --quiet --pre "azure-ai-projects==2.0.0b2" azure-identity\ncat > /tmp/persona.md <<\'GISLEFOSS_PERSONA_EOF\'\n${agentInstructions}\nGISLEFOSS_PERSONA_EOF\ncat > /tmp/upsert-agent.py <<\'PYEOF\'\n${agentScript}\nPYEOF\npython3 /tmp/upsert-agent.py\n'
 
 resource upsert 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
-  name: '${namePrefix}-agent-upsert'
+  name: 'script-${namePrefix}-agent-${regionCode}'
   location: scriptLocation
   tags: tags
   kind: 'AzureCLI'

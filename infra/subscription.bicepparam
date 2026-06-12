@@ -1,7 +1,7 @@
 using './subscription.bicep'
 
 param location = 'swedencentral'
-param resourceGroupName = 'rg-gislefoss'
+param resourceGroupName = 'rg-gislefoss-sdc'
 param namePrefix = 'gislefoss'
 
 // Stage the AI backend first (Foundry account, capability hosts, provisioning UAMI + role, and the
