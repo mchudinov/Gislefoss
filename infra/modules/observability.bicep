@@ -9,11 +9,15 @@
 // surfaces the same traces in the portal Traces tab. App-side tracing is unaffected by its absence.
 
 param namePrefix string
+
+@description('Region abbreviation for resource names (CAF <abbrev>-<project>-<region>).')
+param regionCode string
+
 param location string
 param tags object
 
 resource law 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
-  name: '${namePrefix}-law'
+  name: 'log-${namePrefix}-${regionCode}'
   location: location
   tags: tags
   properties: {
@@ -25,7 +29,7 @@ resource law 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
 }
 
 resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
-  name: '${namePrefix}-ai'
+  name: 'appi-${namePrefix}-${regionCode}'
   location: location
   tags: tags
   kind: 'web'

@@ -2,6 +2,10 @@
 // The identity is granted inference access to Foundry in roles.bicep (no keys).
 
 param namePrefix string
+
+@description('Region abbreviation for resource names (CAF <abbrev>-<project>-<region>).')
+param regionCode string
+
 param location string
 param tags object
 param containerImage string
@@ -20,7 +24,7 @@ resource law 'Microsoft.OperationalInsights/workspaces@2023-09-01' existing = {
 }
 
 resource env 'Microsoft.App/managedEnvironments@2024-03-01' = {
-  name: '${namePrefix}-cae'
+  name: 'cae-${namePrefix}-${regionCode}'
   location: location
   tags: tags
   properties: {
@@ -35,7 +39,7 @@ resource env 'Microsoft.App/managedEnvironments@2024-03-01' = {
 }
 
 resource app 'Microsoft.App/containerApps@2024-03-01' = {
-  name: '${namePrefix}-web'
+  name: 'ca-${namePrefix}-${regionCode}'
   location: location
   tags: tags
   identity: {

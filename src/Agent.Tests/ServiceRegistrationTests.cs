@@ -15,7 +15,7 @@ public class ServiceRegistrationTests
         {
             ["Settings:Agent:ProjectEndpoint"] = "https://x.services.ai.azure.com/api/projects/p",
             ["Settings:Agent:ModelDeploymentName"] = "gpt-4o",
-            ["Settings:Agent:AgentName"] = "Gislefoss",
+            ["Settings:Agent:AgentName"] = "agent-gislefoss-sdc",
         }).Build();
 
         var services = new ServiceCollection()

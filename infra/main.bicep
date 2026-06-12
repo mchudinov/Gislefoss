@@ -9,6 +9,12 @@ param location string = resourceGroup().location
 @description('Region for the agent-upsert deployment-script ACI only. Defaults to West Europe because Sweden Central has tight ACI capacity (DeploymentScriptACIProvisioningTimeout). All other resources use `location`.')
 param agentScriptLocation string = 'westeurope'
 
+@description('Region abbreviation embedded in resource names (Azure CAF: <abbrev>-<project>-<region>). Keep in sync with `location`. sdc = Sweden Central.')
+param regionCode string = 'sdc'
+
+@description('Region abbreviation for the deployment-script ACI resource names — those ACIs deploy to `agentScriptLocation`, not `location`, so their names carry this code. weu = West Europe.')
+param scriptRegionCode string = 'weu'
+
 @description('Chat model name for the deployment.')
 param modelName string = 'gpt-4o'
 
@@ -21,15 +27,35 @@ param containerImage string = ''
 @description('Deploy the Web app + its inference role assignment. Set false to provision only the Foundry account, capability hosts, provisioning identity/role, and the agent (staging the agent before the app exists).')
 param deployApp bool = true
 
+@description('Deploy a Foundry memory store + embedding model and bind it to the agent. Default false keeps the agent STATELESS (no persistent memory). Flip to true to opt in — a deliberate posture change.')
+param deployMemory bool = false
+
+@description('Embedding model for memory retrieval (used only when deployMemory is true).')
+param embeddingModelName string = 'text-embedding-3-small'
+
+@description('Embedding model version (used only when deployMemory is true).')
+param embeddingModelVersion string = '1'
+
+@description('Default memory retention in seconds (0 = no expiry). 2592000 = 30 days.')
+param memoryTtlSeconds int = 2592000
+
 @description('Resource tags.')
 param tags object = {
   workload: 'gislefoss'
 }
 
-var foundryName = '${namePrefix}-aifoundry'
-var guardrailName = '${namePrefix}guardrail'
-var deploymentName = 'chat'
-var agentName = 'Gislefoss'
+// Resource naming — Azure CAF convention <abbrev>-<project>-<region>; model deployments use
+// model-<project>-<purpose>-<region>. namePrefix is the project token ('gislefoss').
+var foundryName = 'aif-${namePrefix}-${regionCode}'
+var projectName = 'proj-${namePrefix}-${regionCode}'
+var guardrailName = 'guardrail-${namePrefix}-${regionCode}'
+var deploymentName = 'model-${namePrefix}-chat-${regionCode}'
+// Data-plane identities (name-keyed agent, opt-in memory store) are NOT ARM resources; they take a
+// descriptive <kind>-<project>-<region> form. The agent name is also wired into the app
+// (appsettings.json, tests, code comments) — renaming it is a deliberate application change.
+var agentName = 'agent-${namePrefix}-${regionCode}'
+var embeddingDeploymentName = 'model-${namePrefix}-embedding-${regionCode}'
+var memoryStoreName = 'mem-${namePrefix}-${regionCode}'
 
 // Persona markdown embedded at compile time from the git source. Path is relative to THIS file
 // (infra/main.bicep) -> repo-root/personas/gislefoss.md.
@@ -39,12 +65,18 @@ module foundry 'modules/foundry.bicep' = {
   name: 'foundry'
   params: {
     foundryName: foundryName
+    projectName: projectName
     location: location
     guardrailName: guardrailName
     deploymentName: deploymentName
     modelName: modelName
     modelVersion: modelVersion
     tags: tags
+    // Embedding deployment is created only when memory is opted in.
+    deployEmbedding: deployMemory
+    embeddingDeploymentName: embeddingDeploymentName
+    embeddingModelName: embeddingModelName
+    embeddingModelVersion: embeddingModelVersion
   }
 }
 
@@ -52,6 +84,7 @@ module obs 'modules/observability.bicep' = {
   name: 'observability'
   params: {
     namePrefix: namePrefix
+    regionCode: regionCode
     location: location
     tags: tags
   }
@@ -62,6 +95,7 @@ module identity 'modules/identity.bicep' = {
   name: 'identity'
   params: {
     namePrefix: namePrefix
+    regionCode: regionCode
     location: location
     tags: tags
   }
@@ -85,6 +119,7 @@ module agent 'modules/agent.bicep' = {
   name: 'agent'
   params: {
     namePrefix: namePrefix
+    regionCode: scriptRegionCode
     scriptLocation: agentScriptLocation
     tags: tags
     projectEndpoint: foundry.outputs.projectEndpoint
@@ -100,6 +135,33 @@ module agent 'modules/agent.bicep' = {
   ]
 }
 
+// Memory store + binding (opt-in; off by default -> the agent stays stateless). When on, the
+// embedding deployment is provisioned in `foundry`, and this module creates the memory store with TTL
+// and binds it to the named agent. dependsOn roles (UAMI role propagation) + foundry (embedding
+// deployment + capability host) + agent (the agent must exist before memory can bind to it).
+module memory 'modules/memory.bicep' = if (deployMemory) {
+  name: 'memory'
+  params: {
+    namePrefix: namePrefix
+    regionCode: scriptRegionCode
+    scriptLocation: agentScriptLocation
+    tags: tags
+    projectEndpoint: foundry.outputs.projectEndpoint
+    chatDeploymentName: foundry.outputs.deploymentName
+    embeddingDeploymentName: foundry.outputs.embeddingDeploymentName
+    agentName: agentName
+    memoryStoreName: memoryStoreName
+    ttlSeconds: memoryTtlSeconds
+    uamiId: identity.outputs.id
+    uamiClientId: identity.outputs.clientId
+  }
+  dependsOn: [
+    roles
+    foundry
+    agent
+  ]
+}
+
 // --- App (optional) ---
 // The app retrieves the agent LAZILY BY NAME at runtime, so it consumes NO agent output — there is
 // no edge between `app` and `agent` in either direction, keeping the graph acyclic.
@@ -107,6 +169,7 @@ module app 'modules/app.bicep' = if (deployApp) {
   name: 'app'
   params: {
     namePrefix: namePrefix
+    regionCode: regionCode
     location: location
     tags: tags
     containerImage: containerImage
