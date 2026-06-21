@@ -23,7 +23,7 @@ import time
 from azure.identity import ManagedIdentityCredential
 from azure.core.exceptions import ResourceNotFoundError
 from azure.ai.projects import AIProjectClient
-from azure.ai.projects.models import PromptAgentDefinition
+from azure.ai.projects.models import MemorySearchTool, PromptAgentDefinition
 
 def _read_instructions():
     """The persona is delivered as a FILE (written by the deploymentScript's scriptContent into the
@@ -41,6 +41,13 @@ MODEL = os.environ["MODEL_DEPLOYMENT_NAME"]
 NAME = os.environ["AGENT_NAME"]
 INSTRUCTIONS = _read_instructions()
 CLIENT_ID = os.environ["UAMI_CLIENT_ID"]
+# Optional memory binding. When set, a MemorySearchTool is attached to the agent definition so the
+# agent reads/writes the named long-term-memory store. scope="{{$userId}}" partitions memory per end
+# user: Foundry resolves it from the x-memory-user-id request header (set app-side, per user) or, if
+# absent, the caller's Microsoft Entra TID+OID. Empty (the deployMemory=false default) => no tool, a
+# stateless agent. NOTE: per-user isolation only becomes live once the app sends x-memory-user-id;
+# until the Web app ships (deployApp), the tool is present but scope resolution is dormant.
+MEMORY_STORE_NAME = os.environ.get("MEMORY_STORE_NAME", "").strip()
 
 credential = ManagedIdentityCredential(client_id=CLIENT_ID)
 project = AIProjectClient(endpoint=ENDPOINT, credential=credential)
@@ -49,7 +56,13 @@ project = AIProjectClient(endpoint=ENDPOINT, credential=credential)
 def upsert():
     """Upsert the agent by NAME. create_version adds a version to the named agent; if the agent does
     not exist yet (first deploy), create it (which also publishes its first version)."""
-    definition = PromptAgentDefinition(model=MODEL, instructions=INSTRUCTIONS)
+    # Build kwargs so `tools` is OMITTED (not sent as null) when memory is off.
+    definition_kwargs = {"model": MODEL, "instructions": INSTRUCTIONS}
+    if MEMORY_STORE_NAME:
+        definition_kwargs["tools"] = [
+            MemorySearchTool(memory_store_name=MEMORY_STORE_NAME, scope="{{$userId}}")
+        ]
+    definition = PromptAgentDefinition(**definition_kwargs)
     try:
         return project.agents.create_version(agent_name=NAME, definition=definition)
     except ResourceNotFoundError:

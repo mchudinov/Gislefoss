@@ -26,6 +26,10 @@ param agentInstructions string
 
 param uamiId string
 param uamiClientId string
+
+@description('Memory store bound to the agent via a MemorySearchTool on its definition. Empty (default) => stateless agent, no memory tool. Set by main.bicep only when deployMemory is true. The store must already exist (main.bicep orders the memory module before this one).')
+param memoryStoreName string = ''
+
 param forceUpdateTag string = utcNow()
 
 // Bicep multi-line ''' ''' strings are VERBATIM (no ${} interpolation, no escapes), so the script
@@ -67,6 +71,7 @@ resource upsert 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
       { name: 'AGENT_NAME', value: agentName }
       { name: 'AGENT_INSTRUCTIONS_FILE', value: '/tmp/persona.md' }
       { name: 'UAMI_CLIENT_ID', value: uamiClientId }
+      { name: 'MEMORY_STORE_NAME', value: memoryStoreName }
     ]
     scriptContent: scriptContent
   }

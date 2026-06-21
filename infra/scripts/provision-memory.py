@@ -1,58 +1,87 @@
 # provision-memory.py — ensure a Foundry memory store NAMED $MEMORY_STORE_NAME exists with the given
-# TTL + models, and bind it to the agent NAMED $AGENT_NAME. Runs as the provisioning UAMI (the same
-# identity that authors the agent in upsert-agent.py, granted Azure AI Developer on the account).
+# chat + embedding models. Runs as the provisioning UAMI (the same identity that authors the agent in
+# upsert-agent.py, granted Azure AI Developer on the account).
 #
-# Memory is a DATA-PLANE object with no ARM resource type, so — exactly like the agent — it is created
-# via a deploymentScript running this file against the project endpoint.
+# A memory store is a DATA-PLANE object with no ARM resource type, so — exactly like the agent — it is
+# created via a deploymentScript running this file against the project endpoint.
 #
-# [DEPLOY-VERIFY] Memory is PREVIEW. The names below reflect the DOCUMENTED shape
-# (MemoryStoreDefaultOptions.default_ttl_seconds, api 2025-11-15-preview); confirm the exact
-# module/method/param names against the installed azure-ai-projects 2.0.0b2 build before relying on
-# this. TTL is set at CREATE time; default_ttl_seconds == 0 means NO expiry.
+# SDK surface (verified against the INSTALLED azure-ai-projects 2.0.0b2 build, not the public >=2.0.0
+# docs which differ):
+#   AIProjectClient(endpoint, credential).memory_stores      # NOT `.beta.memory_stores`
+#     .get(name)                                              -> MemoryStoreObject (404 -> ResourceNotFound)
+#     .create(*, name, definition=MemoryStoreDefinition, description=) -> MemoryStoreObject
+#     .update(name, *, description=, metadata=)               # canNOT change models/options post-create
+#   MemoryStoreDefaultDefinition(*, chat_model, embedding_model, options)
+#   MemoryStoreDefaultOptions(*, user_profile_enabled, user_profile_details, chat_summary_enabled)
 #
-# [DEPLOY-VERIFY] BINDING: memory may attach to the agent DEFINITION (a memory tool) rather than via a
-# standalone call. If so, the attach belongs in upsert-agent.py, and per-user/thread memory scoping
-# may require an app-side run parameter (which WOULD be an application change). See memory.bicep header.
+# BINDING: there is NO `attach_memory` on this SDK. The store is bound to the agent by adding a
+# MemorySearchTool to the agent's own PromptAgentDefinition — that lives in upsert-agent.py (gated on
+# MEMORY_STORE_NAME), NOT here. This module's single job is to make the store exist first.
+#
+# TTL: MemoryStoreDefaultOptions in 2.0.0b2 has NO `default_ttl_seconds` (that field is stable-2.0.0+
+# only), so retention cannot be set on this pin. MEMORY_TTL_SECONDS is read only to warn when a
+# non-default value is requested but cannot be honored — bump the SDK pin to apply TTL.
+#
+# Models/options are fixed at CREATE time (update() only takes description/metadata). To change the
+# chat/embedding model or the option toggles, delete and recreate the store.
 
 import os
 import sys
 import time
 
 from azure.identity import ManagedIdentityCredential
+from azure.core.exceptions import ResourceNotFoundError
 from azure.ai.projects import AIProjectClient
-from azure.ai.projects.models import MemoryStoreDefaultOptions  # [verify class path]
+from azure.ai.projects.models import MemoryStoreDefaultDefinition, MemoryStoreDefaultOptions
 
 ENDPOINT = os.environ["PROJECT_ENDPOINT"]
 CHAT = os.environ["CHAT_DEPLOYMENT_NAME"]          # extraction / consolidation model
 EMBED = os.environ["EMBEDDING_DEPLOYMENT_NAME"]    # retrieval model
-AGENT = os.environ["AGENT_NAME"]                   # bind the store to this agent
 STORE = os.environ["MEMORY_STORE_NAME"]
-TTL = int(os.environ["MEMORY_TTL_SECONDS"])        # 0 = no expiry
+TTL = int(os.environ.get("MEMORY_TTL_SECONDS", "0"))
 CLIENT_ID = os.environ["UAMI_CLIENT_ID"]
+
+if TTL:
+    sys.stderr.write(
+        f"NOTE: MEMORY_TTL_SECONDS={TTL} requested, but azure-ai-projects 2.0.0b2 has no "
+        "default_ttl_seconds on MemoryStoreDefaultOptions; the store is created with NO expiry. "
+        "Bump the SDK pin to honor TTL.\n"
+    )
 
 credential = ManagedIdentityCredential(client_id=CLIENT_ID)
 project = AIProjectClient(endpoint=ENDPOINT, credential=credential)
 
 
 def upsert():
-    """Idempotent: create the memory store if absent, else update its default options (TTL + models).
-    Then bind it to the named agent so the agent's runs read/write this memory."""
-    options = MemoryStoreDefaultOptions(default_ttl_seconds=TTL)  # + procedural-memory toggle, etc.
-    store = project.memory_stores.create_or_update(  # [verify method]
-        name=STORE,
-        default_options=options,
-        chat_model=CHAT,
-        embedding_model=EMBED,
-    )
-    # [verify] standalone bind vs. memory-tool-on-agent-definition (see header).
-    project.agents.attach_memory(agent_name=AGENT, memory_store=store.name)  # [verify]
-    return store
+    """Idempotent get-or-create. The store's models/options are immutable after creation, so an
+    existing store is returned as-is (recreate to change them)."""
+    try:
+        store = project.memory_stores.get(STORE)
+        print(f"memory store already exists: {STORE}")
+        return store
+    except ResourceNotFoundError:
+        options = MemoryStoreDefaultOptions(
+            user_profile_enabled=True,
+            chat_summary_enabled=True,
+        )
+        definition = MemoryStoreDefaultDefinition(
+            chat_model=CHAT,
+            embedding_model=EMBED,
+            options=options,
+        )
+        store = project.memory_stores.create(
+            name=STORE,
+            definition=definition,
+            description="Gislefoss meteorologist agent long-term memory",
+        )
+        print(f"memory store created: {STORE}")
+        return store
 
 
 result = None
 last_error = None
 # Same role-propagation retry envelope as upsert-agent.py (~6 min: 12 x 30s) to tolerate 403s right
-# after the role assignment is created.
+# after the role assignment is created. ResourceNotFoundError is handled INSIDE upsert(), not here.
 for attempt in range(12):
     try:
         result = upsert()
@@ -66,6 +95,6 @@ else:
 
 with open(os.environ["AZ_SCRIPTS_OUTPUT_PATH"], "w") as f:
     import json
-    json.dump({"memoryStoreName": STORE, "ttlSeconds": TTL}, f)
+    json.dump({"memoryStoreName": STORE}, f)
 
-print(f"memory store provisioned: {STORE} (ttl={TTL}s) bound to agent {AGENT}")
+print(f"memory store provisioned: {STORE} (chat={CHAT}, embedding={EMBED})")

@@ -98,8 +98,10 @@ resource deployment 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01
 resource embeddingDeployment 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = if (deployEmbedding) {
   parent: foundry
   name: embeddingDeploymentName
+  // GlobalStandard (not Standard): Sweden Central offers text-embedding-3-small only under
+  // GlobalStandard / DataZoneStandard (az cognitiveservices model list), same as the chat deployment.
   sku: {
-    name: 'Standard'
+    name: 'GlobalStandard'
     capacity: 50
   }
   properties: {
@@ -163,3 +165,6 @@ output deploymentName string = deployment.name
 // Read from the param (not embeddingDeployment.name) so the output resolves whether or not the
 // conditional resource was created.
 output embeddingDeploymentName string = deployEmbedding ? embeddingDeploymentName : ''
+// The project's system-assigned principal — granted Foundry User on the project (roles-project.bicep)
+// so the Agent Service can access its own Foundry-managed data plane (agent/thread storage, memory).
+output projectPrincipalId string = project.identity.principalId

@@ -27,8 +27,8 @@ param containerImage string = ''
 @description('Deploy the Web app + its inference role assignment. Set false to provision only the Foundry account, capability hosts, provisioning identity/role, and the agent (staging the agent before the app exists).')
 param deployApp bool = true
 
-@description('Deploy a Foundry memory store + embedding model and bind it to the agent. Default false keeps the agent STATELESS (no persistent memory). Flip to true to opt in — a deliberate posture change.')
-param deployMemory bool = false
+@description('Deploy a Foundry memory store + embedding model and bind it to the agent (MemorySearchTool, scope {{$userId}}). Defaults TRUE to match the LIVE posture (memory enabled 2026-06-22): every deploy must keep memory bound, otherwise the always-on agent re-upserts with an empty memoryStoreName and publishes a new version with NO memory tool — silently reverting the agent to stateless (the store + embedding persist as orphans, no error). Set false ONLY to deliberately revert to a stateless agent.')
+param deployMemory bool = true
 
 @description('Embedding model for memory retrieval (used only when deployMemory is true).')
 param embeddingModelName string = 'text-embedding-3-small'
@@ -113,8 +113,27 @@ module roles 'modules/roles.bicep' = {
   ]
 }
 
+// Project self-access RBAC: the project's OWN system-assigned identity -> Foundry User on the project.
+// Required so the Agent Service can reach its Foundry-managed data plane (agent/thread storage, memory)
+// AS the project identity — also what clears the portal "Setup incomplete ... Foundry User role for
+// this project" banner. Always on (independent of deployApp/deployMemory): it's a self-scoped,
+// least-privilege grant the Agents capability host needs regardless of the memory opt-in.
+module rolesProject 'modules/roles-project.bicep' = {
+  name: 'rolesProject'
+  params: {
+    foundryName: foundry.outputs.foundryName
+    projectName: foundry.outputs.projectName
+    projectPrincipalId: foundry.outputs.projectPrincipalId
+  }
+  dependsOn: [
+    foundry
+  ]
+}
+
 // Agent upsert (in-deployment, persona from git) — always runs so the agent is staged before the
-// app exists. dependsOn roles (the UAMI role must propagate) + foundry (capability host enabled).
+// app exists. dependsOn roles (the UAMI role must propagate) + foundry (capability host enabled) +
+// memory (when deployMemory, the store must EXIST before the agent's MemorySearchTool references it —
+// see memoryStoreName below; the dependency is a no-op when memory isn't deployed).
 module agent 'modules/agent.bicep' = {
   name: 'agent'
   params: {
@@ -128,17 +147,22 @@ module agent 'modules/agent.bicep' = {
     agentInstructions: personaText
     uamiId: identity.outputs.id
     uamiClientId: identity.outputs.clientId
+    // Bind the agent to the store via a MemorySearchTool only when memory is opted in; '' => stateless.
+    memoryStoreName: deployMemory ? memoryStoreName : ''
   }
   dependsOn: [
     roles
     foundry
+    memory
   ]
 }
 
-// Memory store + binding (opt-in; off by default -> the agent stays stateless). When on, the
-// embedding deployment is provisioned in `foundry`, and this module creates the memory store with TTL
-// and binds it to the named agent. dependsOn roles (UAMI role propagation) + foundry (embedding
-// deployment + capability host) + agent (the agent must exist before memory can bind to it).
+// Memory store (opt-in; off by default -> the agent stays stateless). When on, the embedding
+// deployment is provisioned in `foundry` and this module CREATES the store (models + options). The
+// agent-side binding (a MemorySearchTool on the agent definition) lives in agent.bicep, so the store
+// is created FIRST and `agent` dependsOn `memory`. dependsOn roles (UAMI role propagation) + foundry
+// (embedding deployment + capability host). NOTE: TTL is not applied on the pinned azure-ai-projects
+// 2.0.0b2 (no default_ttl_seconds); the param is plumbed for a future SDK bump.
 module memory 'modules/memory.bicep' = if (deployMemory) {
   name: 'memory'
   params: {
@@ -149,7 +173,6 @@ module memory 'modules/memory.bicep' = if (deployMemory) {
     projectEndpoint: foundry.outputs.projectEndpoint
     chatDeploymentName: foundry.outputs.deploymentName
     embeddingDeploymentName: foundry.outputs.embeddingDeploymentName
-    agentName: agentName
     memoryStoreName: memoryStoreName
     ttlSeconds: memoryTtlSeconds
     uamiId: identity.outputs.id
@@ -158,7 +181,6 @@ module memory 'modules/memory.bicep' = if (deployMemory) {
   dependsOn: [
     roles
     foundry
-    agent
   ]
 }
 
