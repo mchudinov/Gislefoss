@@ -30,6 +30,9 @@ param deployApp bool = true
 @description('Deploy a Foundry memory store + embedding model and bind it to the agent (MemorySearchTool, scope {{$userId}}). Defaults TRUE to match the LIVE posture (memory enabled 2026-06-22): every deploy must keep memory bound, otherwise the always-on agent re-upserts with an empty memoryStoreName and publishes a new version with NO memory tool — silently reverting the agent to stateless (the store + embedding persist as orphans, no error). Set false ONLY to deliberately revert to a stateless agent.')
 param deployMemory bool = true
 
+@description('Provision a custom RAI blocklist (demo-grade PII regex term blocking) and attach it to the Guardrail on both prompt and completion. Defaults true. Independent of deployApp/deployMemory — it only augments the Guardrail attached to the chat model deployment, so it takes effect on every call to that deployment (no Web app required to exercise it).')
+param deployBlocklist bool = true
+
 @description('Embedding model for memory retrieval (used only when deployMemory is true).')
 param embeddingModelName string = 'text-embedding-3-small'
 
@@ -56,6 +59,9 @@ var deploymentName = 'model-${namePrefix}-chat-${regionCode}'
 var agentName = 'agent-${namePrefix}-${regionCode}'
 var embeddingDeploymentName = 'model-${namePrefix}-embedding-${regionCode}'
 var memoryStoreName = 'mem-${namePrefix}-${regionCode}'
+// Custom RAI blocklist is an ARM child of the account, so it follows the CAF <abbrev>-<project>-<region>
+// form (matching the guardrail naming style).
+var blocklistName = 'blocklist-${namePrefix}-${regionCode}'
 
 // Persona markdown embedded at compile time from the git source. Path is relative to THIS file
 // (infra/main.bicep) -> repo-root/personas/gislefoss.md.
@@ -77,6 +83,9 @@ module foundry 'modules/foundry.bicep' = {
     embeddingDeploymentName: embeddingDeploymentName
     embeddingModelName: embeddingModelName
     embeddingModelVersion: embeddingModelVersion
+    // Custom PII blocklist attached to the Guardrail (demo). Independent of memory/app.
+    deployBlocklist: deployBlocklist
+    blocklistName: blocklistName
   }
 }
 
@@ -217,4 +226,5 @@ module rolesApp 'modules/roles-app.bicep' = if (deployApp) {
 output projectEndpoint string = foundry.outputs.projectEndpoint
 output deploymentName string = foundry.outputs.deploymentName
 output agentName string = agent.outputs.agentName
+output blocklistName string = foundry.outputs.blocklistName
 output appUrl string = deployApp ? 'https://${app.outputs.fqdn}' : ''

@@ -25,6 +25,21 @@ param embeddingDeploymentName string = ''
 param embeddingModelName string = ''
 param embeddingModelVersion string = ''
 
+@description('Provision a custom RAI blocklist and attach it to the Guardrail (Prompt + Completion). Demo-grade PII term blocking layered ON TOP of the built-in content filters. When false the blocklist is skipped and the Guardrail keeps only its built-in filters.')
+param deployBlocklist bool = false
+
+@description('Name of the custom RAI blocklist (CAF blocklist-<project>-<region>, passed from main so naming lives in one place). Required when deployBlocklist is true.')
+param blocklistName string = ''
+
+@description('Regex PII patterns added as blocklist items (isRegex=true) when deployBlocklist is true. Demo set: email, US SSN, credit card, US phone, IPv4. Backslashes are DOUBLED for Bicep string escaping (\\d -> literal \\d). Patterns are intentionally UNANCHORED so they match PII embedded anywhere in a prompt/completion, not only when it is the entire input.')
+param piiBlocklistPatterns array = [
+  { name: 'email', pattern: '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}' }
+  { name: 'us-ssn', pattern: '\\b\\d{3}-\\d{2}-\\d{4}\\b' }
+  { name: 'credit-card', pattern: '\\b\\d{4}[- ]?\\d{4}[- ]?\\d{4}[- ]?\\d{4}\\b' }
+  { name: 'us-phone', pattern: '\\b\\d{3}[-.]?\\d{3}[-.]?\\d{4}\\b' }
+  { name: 'ipv4', pattern: '\\b\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\b' }
+]
+
 resource foundry 'Microsoft.CognitiveServices/accounts@2025-06-01' = {
   name: foundryName
   location: location
@@ -48,6 +63,31 @@ resource foundry 'Microsoft.CognitiveServices/accounts@2025-06-01' = {
   }
 }
 
+// Custom RAI blocklist (demo): PII regex terms blocked in prompts + completions, layered on top of
+// the built-in content filters. Created as a child of the account and referenced BY NAME from the
+// Guardrail's customBlocklists below — so it must exist first (the Guardrail dependsOn it). Kept in
+// THIS file rather than a separate module on purpose: the policy references the blocklist by name and
+// both are children of the account created here, so a module split would cycle (foundry -> blocklist
+// -> foundry).
+resource blocklist 'Microsoft.CognitiveServices/accounts/raiBlocklists@2024-10-01' = if (deployBlocklist) {
+  parent: foundry
+  name: blocklistName
+  properties: {
+    description: 'PII patterns (demo) blocked in prompts and completions for the Gislefoss meteorologist agent.'
+  }
+}
+
+resource blocklistItems 'Microsoft.CognitiveServices/accounts/raiBlocklists/raiBlocklistItems@2024-10-01' = [
+  for p in piiBlocklistPatterns: if (deployBlocklist) {
+    parent: blocklist
+    name: p.name
+    properties: {
+      pattern: p.pattern
+      isRegex: true
+    }
+  }
+]
+
 // Guardrail (RAI policy). All actions BLOCK — platform-first injection enforcement.
 // [verify] the Jailbreak + Indirect Attack filter names/sources at deploy (infra-phase0-findings.md
 // Task 0.2 — deferred, needs a write).
@@ -69,7 +109,18 @@ resource guardrail 'Microsoft.CognitiveServices/accounts/raiPolicies@2024-10-01'
       { name: 'Jailbreak', blocking: true, enabled: true, source: 'Prompt' } // [verify name]
       { name: 'Indirect Attack', blocking: true, enabled: true, source: 'Prompt' } // [verify name]
     ]
+    // Custom PII blocklist (demo) layered on top of the built-in filters above, on BOTH prompt and
+    // completion. Referenced by name; the resource is created above and ordered via dependsOn. Empty
+    // array when deployBlocklist is false (no custom blocklist attached).
+    customBlocklists: deployBlocklist ? [
+      { blocklistName: blocklistName, blocking: true, source: 'Prompt' }
+      { blocklistName: blocklistName, blocking: true, source: 'Completion' }
+    ] : []
   }
+  dependsOn: [
+    blocklist
+    blocklistItems
+  ]
 }
 
 resource deployment 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
@@ -168,3 +219,5 @@ output embeddingDeploymentName string = deployEmbedding ? embeddingDeploymentNam
 // The project's system-assigned principal — granted Foundry User on the project (roles-project.bicep)
 // so the Agent Service can access its own Foundry-managed data plane (agent/thread storage, memory).
 output projectPrincipalId string = project.identity.principalId
+// Custom blocklist name (empty when not deployed) — for verification / downstream reference.
+output blocklistName string = deployBlocklist ? blocklistName : ''
