@@ -69,6 +69,13 @@ resource foundry 'Microsoft.CognitiveServices/accounts@2025-06-01' = {
 // THIS file rather than a separate module on purpose: the policy references the blocklist by name and
 // both are children of the account created here, so a module split would cycle (foundry -> blocklist
 // -> foundry).
+// PREFLIGHT BOOTSTRAP: the CognitiveServices RP preflight-validates the Guardrail's customBlocklists
+// reference against EXISTING Azure state, up front, before any resource in this module is created — so
+// dependsOn does NOT satisfy it (a same-module policy+blocklist fails first deploy with "invalid
+// blocklist reference"). On the VERY FIRST creation the (empty) list must already exist — pre-create
+// it once out-of-band:  az rest --method put --url <account>/raiBlocklists/<name>?api-version=2024-10-01
+// The items below and the customBlocklists attachment are then created / idempotently reconciled by
+// THIS deploy, and every subsequent deploy is a no-op update (the list already exists).
 resource blocklist 'Microsoft.CognitiveServices/accounts/raiBlocklists@2024-10-01' = if (deployBlocklist) {
   parent: foundry
   name: blocklistName
