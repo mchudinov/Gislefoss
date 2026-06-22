@@ -84,6 +84,13 @@ resource blocklist 'Microsoft.CognitiveServices/accounts/raiBlocklists@2024-10-0
   }
 }
 
+// @batchSize(1): write the items ONE AT A TIME, not in ARM's default parallel batch of 10. Each item
+// write is validated by the RP against the PARENT blocklist's ETag (If-Match) and mutates that parent,
+// bumping its ETag — so concurrent sibling writes race and all-but-one fail with IfMatchPreconditionFailed
+// (observed: 3 of 5 items reported PreconditionFailed even though the data eventually landed, and the
+// Guardrail's customBlocklists attachment — which dependsOn these — was then skipped). Serializing makes
+// each iteration re-read the current parent ETag, so the writes succeed deterministically.
+@batchSize(1)
 resource blocklistItems 'Microsoft.CognitiveServices/accounts/raiBlocklists/raiBlocklistItems@2024-10-01' = [
   for p in piiBlocklistPatterns: if (deployBlocklist) {
     parent: blocklist
