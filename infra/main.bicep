@@ -33,6 +33,9 @@ param deployMemory bool = true
 @description('Provision a custom RAI blocklist (demo-grade PII regex term blocking) and attach it to the Guardrail on both prompt and completion. Defaults true. Independent of deployApp/deployMemory — it only augments the Guardrail attached to the chat model deployment, so it takes effect on every call to that deployment (no Web app required to exercise it).')
 param deployBlocklist bool = true
 
+@description('Create an account-level Application Insights connection on the Foundry account so the Agent Service emits SERVER-SIDE agent traces (agent runs, model/tool calls, token usage) to App Insights — the project Monitoring tab / App Insights Agents view. Defaults true. Independent of deployApp: this is the agent-side telemetry path, distinct from the client-side OTel export the Web app uses.')
+param connectAppInsights bool = true
+
 @description('Embedding model for memory retrieval (used only when deployMemory is true).')
 param embeddingModelName string = 'text-embedding-3-small'
 
@@ -62,6 +65,9 @@ var memoryStoreName = 'mem-${namePrefix}-${regionCode}'
 // Custom RAI blocklist is an ARM child of the account, so it follows the CAF <abbrev>-<project>-<region>
 // form (matching the guardrail naming style).
 var blocklistName = 'blocklist-${namePrefix}-${regionCode}'
+// Account-level App Insights connection — named <account>-appinsights, matching Microsoft's canonical
+// Foundry connection sample (the portal uses this same convention).
+var appInsightsConnectionName = '${foundryName}-appinsights'
 
 // Persona markdown embedded at compile time from the git source. Path is relative to THIS file
 // (infra/main.bicep) -> repo-root/personas/gislefoss.md.
@@ -96,6 +102,21 @@ module obs 'modules/observability.bicep' = {
     regionCode: regionCode
     location: location
     tags: tags
+  }
+}
+
+// Foundry -> App Insights connection: enables SERVER-SIDE agent tracing (the Foundry Agent Service
+// emits GenAI traces to App Insights — project Monitoring tab / App Insights Agents view). This is the
+// agent-side telemetry path, distinct from the Web app's client-side OTel export, so it works even with
+// deployApp=false. The dependencies on `foundry` (account must exist) and `obs` (App Insights must
+// exist) are INFERRED from the consumed module outputs — no explicit dependsOn needed.
+module appInsightsConnection 'modules/observability-connection.bicep' = if (connectAppInsights) {
+  name: 'appInsightsConnection'
+  params: {
+    foundryName: foundry.outputs.foundryName
+    connectionName: appInsightsConnectionName
+    appInsightsId: obs.outputs.appInsightsId
+    appInsightsConnectionString: obs.outputs.appInsightsConnectionString
   }
 }
 
@@ -227,4 +248,5 @@ output projectEndpoint string = foundry.outputs.projectEndpoint
 output deploymentName string = foundry.outputs.deploymentName
 output agentName string = agent.outputs.agentName
 output blocklistName string = foundry.outputs.blocklistName
+output appInsightsConnectionName string = connectAppInsights ? appInsightsConnectionName : ''
 output appUrl string = deployApp ? 'https://${app.outputs.fqdn}' : ''
